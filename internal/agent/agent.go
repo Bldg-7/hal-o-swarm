@@ -6,14 +6,17 @@ import (
 	"sync"
 
 	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
+	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
 )
 
 // Agent represents a local hal-agent instance managing projects and opencode processes.
 type Agent struct {
-	cfg      *config.AgentConfig
-	registry *ProjectRegistry
-	mu       sync.RWMutex
-	running  bool
+	cfg          *config.AgentConfig
+	registry     *ProjectRegistry
+	envCheckers  map[string]*EnvChecker
+	lastEnvCheck map[string]*CheckResult
+	mu           sync.RWMutex
+	running      bool
 }
 
 // NewAgent creates a new Agent instance with the given config.
@@ -28,15 +31,21 @@ func NewAgent(cfg *config.AgentConfig) (*Agent, error) {
 		return nil, fmt.Errorf("failed to initialize project registry: %w", err)
 	}
 
+	envCheckers := make(map[string]*EnvChecker)
+	for _, proj := range registry.ListProjects() {
+		envCheckers[proj.Name] = NewEnvChecker(proj.Directory, nil)
+	}
+
 	return &Agent{
-		cfg:      cfg,
-		registry: registry,
-		running:  false,
+		cfg:          cfg,
+		registry:     registry,
+		envCheckers:  envCheckers,
+		lastEnvCheck: make(map[string]*CheckResult),
+		running:      false,
 	}, nil
 }
 
 // Start initializes the agent and begins managing opencode processes.
-// This is a skeleton implementation; actual process management is in T10.
 func (a *Agent) Start(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -47,10 +56,47 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// TODO (T10): Start opencode serve processes for each project
 	// TODO (T7): Connect to supervisor via WebSocket
-	// TODO (T17): Check environment requirements
 
 	a.running = true
 	return nil
+}
+
+// CheckEnv runs environment checks for a project against the given manifest requirements.
+// Returns nil if the project is not found. This is read-only and never mutates the environment.
+func (a *Agent) CheckEnv(ctx context.Context, projectName string, reqs *config.ManifestRequirements) *CheckResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	checker, ok := a.envCheckers[projectName]
+	if !ok {
+		return nil
+	}
+
+	result := checker.Check(ctx, reqs)
+	a.lastEnvCheck[projectName] = result
+	return result
+}
+
+// GetLastEnvCheck returns the most recent check result for a project, or nil if none.
+func (a *Agent) GetLastEnvCheck(projectName string) *CheckResult {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastEnvCheck[projectName]
+}
+
+// ProvisionProject runs the auto-provisioner for a single project.
+func (a *Agent) ProvisionProject(projectName string, manifest *config.EnvManifest, templateDir string, emitter EventEmitter) (*shared.ProvisionResult, error) {
+	a.mu.RLock()
+	reg := a.registry
+	a.mu.RUnlock()
+
+	proj := reg.GetProject(projectName)
+	if proj == nil {
+		return nil, fmt.Errorf("project not found: %s", projectName)
+	}
+
+	prov := NewProvisioner(proj.Directory, proj.Name, manifest, templateDir, emitter)
+	return prov.Provision()
 }
 
 // Stop gracefully shuts down the agent and all managed processes.

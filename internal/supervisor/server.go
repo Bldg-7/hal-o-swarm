@@ -25,6 +25,7 @@ type Server struct {
 
 	httpAPI      *HTTPAPI
 	httpShutdown func(ctx context.Context) error
+	costs        *CostAggregator
 }
 
 // NewServer creates a new supervisor server instance.
@@ -86,6 +87,10 @@ func (s *Server) Start() error {
 	s.wg.Add(1)
 	go s.maintenanceLoop()
 
+	if s.costs != nil {
+		s.costs.Start(s.ctx)
+	}
+
 	if s.httpAPI != nil && s.cfg.Server.HTTPPort > 0 {
 		addr := fmt.Sprintf(":%d", s.cfg.Server.HTTPPort)
 		httpSrv := &http.Server{
@@ -130,6 +135,9 @@ func (s *Server) Stop() error {
 	}
 
 	s.cancel()
+	if s.costs != nil {
+		s.costs.Stop()
+	}
 
 	// Wait for all goroutines to finish with timeout
 	done := make(chan struct{})
@@ -182,4 +190,14 @@ func (s *Server) Hub() *Hub {
 
 func (s *Server) SetHTTPAPI(api *HTTPAPI) {
 	s.httpAPI = api
+	if s.costs != nil {
+		s.httpAPI.SetCostAggregator(s.costs)
+	}
+}
+
+func (s *Server) SetCostAggregator(aggregator *CostAggregator) {
+	s.costs = aggregator
+	if s.httpAPI != nil {
+		s.httpAPI.SetCostAggregator(aggregator)
+	}
 }

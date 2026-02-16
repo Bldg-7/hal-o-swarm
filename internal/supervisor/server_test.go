@@ -24,17 +24,7 @@ func TestServerLifecycle(t *testing.T) {
 			HeartbeatIntervalSec:  30,
 			HeartbeatTimeoutCount: 3,
 		},
-		Cost: struct {
-			PollIntervalMinutes int `json:"poll_interval_minutes"`
-			Providers           struct {
-				Anthropic struct {
-					AdminAPIKey string `json:"admin_api_key"`
-				} `json:"anthropic"`
-				OpenAI struct {
-					OrgAPIKey string `json:"org_api_key"`
-				} `json:"openai"`
-			} `json:"providers"`
-		}{
+		Cost: config.CostConfig{
 			PollIntervalMinutes: 5,
 		},
 	}
@@ -78,17 +68,7 @@ func TestServerDoubleStart(t *testing.T) {
 			HeartbeatIntervalSec:  30,
 			HeartbeatTimeoutCount: 3,
 		},
-		Cost: struct {
-			PollIntervalMinutes int `json:"poll_interval_minutes"`
-			Providers           struct {
-				Anthropic struct {
-					AdminAPIKey string `json:"admin_api_key"`
-				} `json:"anthropic"`
-				OpenAI struct {
-					OrgAPIKey string `json:"org_api_key"`
-				} `json:"openai"`
-			} `json:"providers"`
-		}{
+		Cost: config.CostConfig{
 			PollIntervalMinutes: 5,
 		},
 	}
@@ -121,17 +101,7 @@ func TestServerDoubleStop(t *testing.T) {
 			HeartbeatIntervalSec:  30,
 			HeartbeatTimeoutCount: 3,
 		},
-		Cost: struct {
-			PollIntervalMinutes int `json:"poll_interval_minutes"`
-			Providers           struct {
-				Anthropic struct {
-					AdminAPIKey string `json:"admin_api_key"`
-				} `json:"anthropic"`
-				OpenAI struct {
-					OrgAPIKey string `json:"org_api_key"`
-				} `json:"openai"`
-			} `json:"providers"`
-		}{
+		Cost: config.CostConfig{
 			PollIntervalMinutes: 5,
 		},
 	}
@@ -167,17 +137,7 @@ func TestServerContextCancellation(t *testing.T) {
 			HeartbeatIntervalSec:  30,
 			HeartbeatTimeoutCount: 3,
 		},
-		Cost: struct {
-			PollIntervalMinutes int `json:"poll_interval_minutes"`
-			Providers           struct {
-				Anthropic struct {
-					AdminAPIKey string `json:"admin_api_key"`
-				} `json:"anthropic"`
-				OpenAI struct {
-					OrgAPIKey string `json:"org_api_key"`
-				} `json:"openai"`
-			} `json:"providers"`
-		}{
+		Cost: config.CostConfig{
 			PollIntervalMinutes: 5,
 		},
 	}
@@ -223,17 +183,7 @@ func TestServerGracefulShutdown(t *testing.T) {
 			HeartbeatIntervalSec:  30,
 			HeartbeatTimeoutCount: 3,
 		},
-		Cost: struct {
-			PollIntervalMinutes int `json:"poll_interval_minutes"`
-			Providers           struct {
-				Anthropic struct {
-					AdminAPIKey string `json:"admin_api_key"`
-				} `json:"anthropic"`
-				OpenAI struct {
-					OrgAPIKey string `json:"org_api_key"`
-				} `json:"openai"`
-			} `json:"providers"`
-		}{
+		Cost: config.CostConfig{
 			PollIntervalMinutes: 5,
 		},
 	}

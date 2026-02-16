@@ -1,0 +1,4 @@
+#!/bin/sh
+# pre-commit hook - hal-o-swarm managed
+# Add project-specific pre-commit checks below.
+exit 0

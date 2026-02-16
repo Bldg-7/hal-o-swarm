@@ -17,6 +17,7 @@ type HTTPAPI struct {
 	registry   *NodeRegistry
 	tracker    *SessionTracker
 	dispatcher *CommandDispatcher
+	costs      *CostAggregator
 	db         *sql.DB
 	authToken  string
 	logger     *zap.Logger
@@ -53,9 +54,14 @@ func (a *HTTPAPI) Handler() http.Handler {
 	mux.Handle("GET /api/v1/nodes", a.requireAuth(http.HandlerFunc(a.handleListNodes)))
 	mux.Handle("GET /api/v1/nodes/{id}", a.requireAuth(http.HandlerFunc(a.handleGetNode)))
 	mux.Handle("GET /api/v1/events", a.requireAuth(http.HandlerFunc(a.handleListEvents)))
+	mux.Handle("GET /api/v1/cost", a.requireAuth(http.HandlerFunc(a.handleCostReport)))
 	mux.Handle("POST /api/v1/commands", a.requireAuth(http.HandlerFunc(a.handleCommand)))
 
 	return mux
+}
+
+func (a *HTTPAPI) SetCostAggregator(aggregator *CostAggregator) {
+	a.costs = aggregator
 }
 
 type apiResponse struct {
@@ -397,6 +403,27 @@ func (a *HTTPAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
 			Timestamp: result.Timestamp,
 		},
 	})
+}
+
+func (a *HTTPAPI) handleCostReport(w http.ResponseWriter, r *http.Request) {
+	if a.costs == nil {
+		writeError(w, http.StatusServiceUnavailable, "cost aggregator unavailable", "SERVICE_UNAVAILABLE")
+		return
+	}
+
+	period := strings.ToLower(r.URL.Query().Get("period"))
+	if period == "" {
+		period = "today"
+	}
+
+	report, err := a.costs.Report(period)
+	if err != nil {
+		a.logger.Error("cost report failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{Data: report})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

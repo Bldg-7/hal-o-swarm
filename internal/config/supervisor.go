@@ -36,20 +36,54 @@ type SupervisorConfig struct {
 			WebhookURL string `json:"webhook_url"`
 		} `json:"n8n"`
 	} `json:"channels"`
-	Cost struct {
-		PollIntervalMinutes int `json:"poll_interval_minutes"`
-		Providers           struct {
-			Anthropic struct {
-				AdminAPIKey string `json:"admin_api_key"`
-			} `json:"anthropic"`
-			OpenAI struct {
-				OrgAPIKey string `json:"org_api_key"`
-			} `json:"openai"`
-		} `json:"providers"`
-	} `json:"cost"`
+	Cost         CostConfig    `json:"cost"`
 	Routes       []interface{} `json:"routes"`
 	Policies     PolicyConfig  `json:"policies"`
 	Dependencies interface{}   `json:"dependencies"`
+}
+
+type CostConfig struct {
+	PollIntervalMinutes int           `json:"poll_interval_minutes"`
+	Providers           CostProviders `json:"providers"`
+	RequestTimeoutSec   int           `json:"request_timeout_seconds"`
+	MaxRetries          int           `json:"max_retries"`
+	BackoffBaseMS       int           `json:"backoff_base_ms"`
+}
+
+type CostProviders struct {
+	Anthropic CostProviderConfig `json:"anthropic"`
+	OpenAI    CostProviderConfig `json:"openai"`
+}
+
+type CostProviderConfig struct {
+	APIKey      string               `json:"api_key"`
+	Enabled     *bool                `json:"enabled,omitempty"`
+	ModelRates  map[string]ModelRate `json:"model_rates"`
+	BaseURL     string               `json:"base_url,omitempty"`
+	AdminAPIKey string               `json:"admin_api_key,omitempty"`
+	OrgAPIKey   string               `json:"org_api_key,omitempty"`
+}
+
+type ModelRate struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
+}
+
+func (p CostProviderConfig) EffectiveAPIKey() string {
+	if p.APIKey != "" {
+		return p.APIKey
+	}
+	if p.AdminAPIKey != "" {
+		return p.AdminAPIKey
+	}
+	return p.OrgAPIKey
+}
+
+func (p CostProviderConfig) IsEnabled() bool {
+	if p.Enabled != nil {
+		return *p.Enabled
+	}
+	return p.EffectiveAPIKey() != ""
 }
 
 type PolicyConfig struct {
@@ -91,6 +125,10 @@ const (
 	defaultKillCostThresholdUSD     = 10.0
 	defaultKillMaxRetries           = 1
 	defaultKillRetryResetSec        = 86400
+	defaultCostPollIntervalMinutes  = 60
+	defaultCostRequestTimeoutSec    = 15
+	defaultCostMaxRetries           = 3
+	defaultCostBackoffBaseMS        = 500
 )
 
 func LoadSupervisorConfig(path string) (*SupervisorConfig, error) {
@@ -128,7 +166,23 @@ func validateSupervisorConfig(cfg *SupervisorConfig) error {
 		return fmt.Errorf("validation error: server.heartbeat_timeout_count must be positive, got %d", cfg.Server.HeartbeatTimeoutCount)
 	}
 	if cfg.Cost.PollIntervalMinutes <= 0 {
-		return fmt.Errorf("validation error: cost.poll_interval_minutes must be positive, got %d", cfg.Cost.PollIntervalMinutes)
+		cfg.Cost.PollIntervalMinutes = defaultCostPollIntervalMinutes
+	}
+	if cfg.Cost.RequestTimeoutSec <= 0 {
+		cfg.Cost.RequestTimeoutSec = defaultCostRequestTimeoutSec
+	}
+	if cfg.Cost.MaxRetries <= 0 {
+		cfg.Cost.MaxRetries = defaultCostMaxRetries
+	}
+	if cfg.Cost.BackoffBaseMS <= 0 {
+		cfg.Cost.BackoffBaseMS = defaultCostBackoffBaseMS
+	}
+
+	if err := validateCostProviderConfig("anthropic", cfg.Cost.Providers.Anthropic); err != nil {
+		return err
+	}
+	if err := validateCostProviderConfig("openai", cfg.Cost.Providers.OpenAI); err != nil {
+		return err
 	}
 
 	cfg.applyPolicyDefaults()
@@ -164,6 +218,27 @@ func validateSupervisorConfig(cfg *SupervisorConfig) error {
 	}
 	if cfg.Policies.KillOnCost.RetryResetSeconds <= 0 {
 		return fmt.Errorf("validation error: policies.kill_on_cost.retry_reset_seconds must be positive, got %d", cfg.Policies.KillOnCost.RetryResetSeconds)
+	}
+
+	return nil
+}
+
+func validateCostProviderConfig(provider string, cfg CostProviderConfig) error {
+	if !cfg.IsEnabled() {
+		return nil
+	}
+
+	if cfg.EffectiveAPIKey() == "" {
+		return fmt.Errorf("validation error: cost.providers.%s.api_key is required when provider is enabled", provider)
+	}
+
+	for model, rates := range cfg.ModelRates {
+		if model == "" {
+			return fmt.Errorf("validation error: cost.providers.%s.model_rates keys must not be empty", provider)
+		}
+		if rates.Input < 0 || rates.Output < 0 {
+			return fmt.Errorf("validation error: cost.providers.%s.model_rates.%s rates must be >= 0", provider, model)
+		}
 	}
 
 	return nil
