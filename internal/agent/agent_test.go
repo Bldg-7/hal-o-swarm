@@ -38,7 +38,7 @@ func TestLoadProjects(t *testing.T) {
 	}
 
 	// Create agent
-	agent, err := NewAgent(cfg)
+	agent, err := NewAgent(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewAgent failed: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestLoadProjectsNonexistentDirectory(t *testing.T) {
 		},
 	}
 
-	_, err := NewAgent(cfg)
+	_, err := NewAgent(cfg, nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory, got nil")
 	}
@@ -134,7 +134,7 @@ func TestLoadProjectsDuplicateNames(t *testing.T) {
 		},
 	}
 
-	_, err := NewAgent(cfg)
+	_, err := NewAgent(cfg, nil)
 	if err == nil {
 		t.Fatal("expected error for duplicate project names, got nil")
 	}
@@ -165,7 +165,7 @@ func TestAgentLifecycle(t *testing.T) {
 		},
 	}
 
-	agent, err := NewAgent(cfg)
+	agent, err := NewAgent(cfg, nil)
 	if err != nil {
 		t.Fatalf("NewAgent failed: %v", err)
 	}

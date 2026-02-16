@@ -11,6 +11,7 @@ import (
 
 	"github.com/hal-o-swarm/hal-o-swarm/internal/agent"
 	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -23,8 +24,14 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
+	logger, err := zap.NewProduction()
+	if err != nil {
+		log.Fatalf("failed to initialize logger: %v", err)
+	}
+	defer logger.Sync()
+
 	// Create agent
-	ag, err := agent.NewAgent(cfg)
+	ag, err := agent.NewAgent(cfg, logger)
 	if err != nil {
 		log.Fatalf("failed to create agent: %v", err)
 	}

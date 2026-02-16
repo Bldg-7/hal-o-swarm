@@ -2,6 +2,7 @@
   "supervisor_url": "ws://192.168.10.x:8420",
   "auth_token": "your-shared-secret-here",
   "opencode_port": 4096,
+  "auth_report_interval_sec": 30,
   "projects": [
     {
       "name": "ai-os-interfaces",

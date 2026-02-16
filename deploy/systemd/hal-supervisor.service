@@ -1,6 +1,6 @@
 [Unit]
 Description=HAL-O-SWARM Supervisor - Distributed LLM Agent Control Plane
-Documentation=https://github.com/code-yeongyu/hal-o-swarm/blob/main/docs/DEPLOYMENT.md
+Documentation=https://github.com/bldg-7/hal-o-swarm/blob/main/docs/DEPLOYMENT.md
 After=network-online.target
 Wants=network-online.target
 

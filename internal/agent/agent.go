@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
 	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
+	"go.uber.org/zap"
 )
 
 // Agent represents a local hal-agent instance managing projects and opencode processes.
@@ -17,12 +20,22 @@ type Agent struct {
 	lastEnvCheck map[string]*CheckResult
 	mu           sync.RWMutex
 	running      bool
+
+	logger             *zap.Logger
+	wsClient           *WSClient
+	credApplier        *CredentialApplier
+	authReporter       *AuthReporter
+	oauthExecutor      *OAuthTriggerExecutor
+	authReporterCancel context.CancelFunc
 }
 
 // NewAgent creates a new Agent instance with the given config.
-func NewAgent(cfg *config.AgentConfig) (*Agent, error) {
+func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) (*Agent, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
+	}
+	if logger == nil {
+		logger = zap.NewNop()
 	}
 
 	// Load and validate projects
@@ -42,6 +55,7 @@ func NewAgent(cfg *config.AgentConfig) (*Agent, error) {
 		envCheckers:  envCheckers,
 		lastEnvCheck: make(map[string]*CheckResult),
 		running:      false,
+		logger:       logger,
 	}, nil
 }
 
@@ -54,11 +68,64 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("agent is already running")
 	}
 
-	// TODO (T10): Start opencode serve processes for each project
-	// TODO (T7): Connect to supervisor via WebSocket
+	logger := a.logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	a.credApplier = NewCredentialApplier(logger)
+	a.wsClient = NewWSClient(
+		a.cfg.SupervisorURL,
+		a.cfg.AuthToken,
+		logger,
+	)
+
+	if err := RegisterCredentialPushHandler(a.wsClient, a.credApplier); err != nil {
+		return fmt.Errorf("register credential push handler: %w", err)
+	}
+
+	nodeID := nodeIdentifier()
+	if err := RegisterCredentialSyncOnReconnect(a.wsClient, a.credApplier, nodeID); err != nil {
+		return fmt.Errorf("register credential sync on reconnect: %w", err)
+	}
+
+	authRunner := NewAuthCommandRunner(10*time.Second, logger)
+
+	a.oauthExecutor = NewOAuthTriggerExecutor(authRunner, logger)
+	if err := RegisterOAuthTriggerHandler(a.wsClient, a.oauthExecutor); err != nil {
+		return fmt.Errorf("register oauth trigger handler: %w", err)
+	}
+
+	adapters := []AuthAdapter{
+		NewOpencodeAuthAdapter(authRunner, logger),
+		NewClaudeAuthAdapter(authRunner, logger),
+		NewCodexAuthAdapter(authRunner, logger),
+	}
+
+	reportInterval := time.Duration(a.cfg.AuthReportIntervalSec) * time.Second
+	sender := NewWSAuthStateSender(a.wsClient)
+	a.authReporter = NewAuthReporter(adapters, reportInterval, sender, logger)
+
+	reporterCtx, reporterCancel := context.WithCancel(ctx)
+	a.authReporterCancel = reporterCancel
+	go a.authReporter.Start(reporterCtx)
+
+	a.wsClient.Connect(ctx)
 
 	a.running = true
+	logger.Info("agent started",
+		zap.String("supervisor_url", a.cfg.SupervisorURL),
+		zap.Int("projects", len(a.cfg.Projects)),
+	)
 	return nil
+}
+
+func nodeIdentifier() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "unknown-node"
+	}
+	return hostname
 }
 
 // CheckEnv runs environment checks for a project against the given manifest requirements.
@@ -108,11 +175,32 @@ func (a *Agent) Stop(ctx context.Context) error {
 		return fmt.Errorf("agent is not running")
 	}
 
-	// TODO (T10): Stop all opencode serve processes
-	// TODO (T7): Close supervisor WebSocket connection
+	if a.authReporterCancel != nil {
+		a.authReporterCancel()
+	}
+
+	if a.wsClient != nil {
+		if err := a.wsClient.Close(); err != nil {
+			if a.logger != nil {
+				a.logger.Warn("error closing ws client", zap.Error(err))
+			}
+		}
+	}
 
 	a.running = false
+	if a.logger != nil {
+		a.logger.Info("agent stopped")
+	}
 	return nil
+}
+
+func (a *Agent) GetCredentialEnv() map[string]string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.credApplier == nil {
+		return nil
+	}
+	return a.credApplier.GetEnv()
 }
 
 // IsRunning returns whether the agent is currently running.

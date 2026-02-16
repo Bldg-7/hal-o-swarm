@@ -84,7 +84,7 @@ HAL-O-SWARM follows a 2-tier hub-and-spoke architecture:
 
 ```bash
 # Clone repository
-git clone https://github.com/code-yeongyu/hal-o-swarm.git
+git clone https://github.com/bldg-7/hal-o-swarm.git
 cd hal-o-swarm
 
 # Install all components

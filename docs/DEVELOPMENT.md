@@ -25,7 +25,7 @@ This guide covers development workflows, testing, and contribution guidelines fo
 
 ```bash
 # Clone repository
-git clone https://github.com/code-yeongyu/hal-o-swarm.git
+git clone https://github.com/bldg-7/hal-o-swarm.git
 cd hal-o-swarm
 
 # Install dependencies

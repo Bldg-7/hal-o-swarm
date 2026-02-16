@@ -7,10 +7,11 @@ import (
 )
 
 type AgentConfig struct {
-	SupervisorURL string `json:"supervisor_url"`
-	AuthToken     string `json:"auth_token"`
-	OpencodePort  int    `json:"opencode_port"`
-	Projects      []struct {
+	SupervisorURL         string `json:"supervisor_url"`
+	AuthToken             string `json:"auth_token"`
+	OpencodePort          int    `json:"opencode_port"`
+	AuthReportIntervalSec int    `json:"auth_report_interval_sec"`
+	Projects              []struct {
 		Name      string `json:"name"`
 		Directory string `json:"directory"`
 	} `json:"projects"`
@@ -35,6 +36,10 @@ func LoadAgentConfig(path string) (*AgentConfig, error) {
 }
 
 func validateAgentConfig(cfg *AgentConfig) error {
+	if cfg.AuthReportIntervalSec <= 0 {
+		cfg.AuthReportIntervalSec = 30
+	}
+
 	if cfg.SupervisorURL == "" {
 		return fmt.Errorf("validation error: supervisor_url is required")
 	}

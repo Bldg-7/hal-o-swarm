@@ -16,6 +16,10 @@ type CredentialDistributionConfig struct {
 	Agents   map[string]CredentialDefaults `json:"agents"`
 }
 
+type DatabaseConfig struct {
+	Path string `json:"path"`
+}
+
 type SupervisorConfig struct {
 	Server struct {
 		Port                  int      `json:"port"`
@@ -46,6 +50,7 @@ type SupervisorConfig struct {
 			WebhookURL string `json:"webhook_url"`
 		} `json:"n8n"`
 	} `json:"channels"`
+	Database     DatabaseConfig               `json:"database"`
 	Cost         CostConfig                   `json:"cost"`
 	Routes       []interface{}                `json:"routes"`
 	Policies     PolicyConfig                 `json:"policies"`
@@ -196,6 +201,9 @@ func validateSupervisorConfig(cfg *SupervisorConfig) error {
 	}
 	if cfg.Server.AuthToken == "" {
 		return fmt.Errorf("validation error: server.auth_token is required")
+	}
+	if cfg.Database.Path == "" {
+		cfg.Database.Path = "./supervisor.db"
 	}
 	if cfg.Server.HeartbeatIntervalSec <= 0 {
 		return fmt.Errorf("validation error: server.heartbeat_interval_sec must be positive, got %d", cfg.Server.HeartbeatIntervalSec)

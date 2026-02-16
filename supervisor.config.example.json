@@ -6,6 +6,9 @@
     "heartbeat_interval_sec": 30,
     "heartbeat_timeout_count": 3
   },
+  "database": {
+    "path": "/var/lib/hal-o-swarm/supervisor.db"
+  },
   "channels": {
     "discord": {
       "bot_token": "your-discord-bot-token",

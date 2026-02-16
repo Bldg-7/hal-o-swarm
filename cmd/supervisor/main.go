@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"os"
@@ -9,8 +10,10 @@ import (
 	"syscall"
 
 	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
+	"github.com/hal-o-swarm/hal-o-swarm/internal/storage"
 	"github.com/hal-o-swarm/hal-o-swarm/internal/supervisor"
 	"go.uber.org/zap"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -38,12 +41,34 @@ func main() {
 	)
 
 	srv := supervisor.NewServer(cfg, logger)
+	db, err := sql.Open("sqlite", cfg.Database.Path)
+	if err != nil {
+		logger.Error("failed to open database", zap.Error(err))
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	migrationRunner := storage.NewMigrationRunner(db)
+	if err := migrationRunner.Migrate(); err != nil {
+		logger.Error("failed to run migrations", zap.Error(err))
+		os.Exit(1)
+	}
+	logger.Info("database migrations complete")
+
+	registry := supervisor.NewNodeRegistry(db, logger)
+	tracker := supervisor.NewSessionTracker(db, logger)
+	dispatcher := supervisor.NewCommandDispatcher(db, registry, tracker, srv.Hub(), logger)
+	audit := supervisor.NewAuditLogger(db, logger)
+
+	srv.SetAuditLogger(audit)
+	srv.SetRegistry(registry)
 
 	supervisor.InitMetrics()
 	logger.Info("metrics initialized")
 
 	if cfg.Server.HTTPPort > 0 {
-		api := supervisor.NewHTTPAPI(nil, nil, nil, nil, cfg.Server.AuthToken, logger)
+		api := supervisor.NewHTTPAPI(registry, tracker, dispatcher, db, cfg.Server.AuthToken, logger)
+		api.SetAuditLogger(audit)
 		srv.SetHTTPAPI(api)
 		logger.Info("http api configured", zap.Int("http_port", cfg.Server.HTTPPort))
 	}
