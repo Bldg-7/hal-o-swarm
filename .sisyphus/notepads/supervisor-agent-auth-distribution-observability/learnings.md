@@ -501,6 +501,43 @@ type NodeEntry struct {
 ### Verification
 - `go test ./internal/agent/... -count=1 -timeout 60s` passes
 - `go test ./internal/agent/... -race -count=1 -timeout 60s` passes
+
+---
+
+## Task 17: Supervisor Auth-State Ingest and Projection
+
+### Completed
+- Added `internal/supervisor/auth_state.go` with `HandleAuthStateMessage(nodeID, payload)` on `NodeRegistry`
+- Wired supervisor ingest path in `agent_conn.go` for `MessageTypeAuthState`
+- Added `hub.reconcileAuthState(nodeID, payload)` with warning logs on ingest failures
+- Added tests in `internal/supervisor/auth_state_ingest_test.go`:
+  - `TestAuthStateIngest`
+  - `TestAuthStateMalformed`
+  - `TestAuthStateUnknownNode`
+
+### Message Handling Flow
+1. `AgentConn.readPump` unmarshals envelope and dispatches to `handleEnvelope`
+2. For `type == "auth_state"`, supervisor calls `hub.reconcileAuthState(agentID, payload)`
+3. Hub forwards to registry via `HandleAuthStateMessage`
+4. Registry unmarshals `[]shared.AuthStateReport`, validates non-empty payload, converts to `map[string]NodeAuthState`, and calls `UpdateAuthState`
+
+### Validation and Failure Behavior
+- Malformed JSON payload: warning log + ignore
+- Empty report array: warning log + ignore
+- Unknown node ID: `UpdateAuthState` returns `ErrNodeNotFound`, warning log + ignore
+- No panic path on malformed or unknown-node ingest
+
+### Type Mapping
+- `AuthStateReport.Tool` (`ToolIdentifier`) -> `NodeAuthState.Tool` (`string`)
+- `AuthStateReport.Status` (`AuthStatus`) -> `NodeAuthState.Status` (`string`)
+- `Reason` and `CheckedAt` copied directly
+- Stored auth projection contains no secret fields (status metadata only)
+
+### Verification
+- `go test ./internal/supervisor/... -count=1 -timeout 60s` passes
+- Evidence files:
+  - `.sisyphus/evidence/task-17-ingest-pass.txt`
+  - `.sisyphus/evidence/task-17-ingest-fail.txt`
 - Evidence files created:
   - `.sisyphus/evidence/task-9-apply-pass.txt`
   - `.sisyphus/evidence/task-9-apply-fail.txt`
@@ -611,3 +648,258 @@ type NodeEntry struct {
 - Evidence files:
   - `.sisyphus/evidence/task-12-reconcile-pass.txt`
   - `.sisyphus/evidence/task-12-reconcile-fail.txt`
+
+---
+
+## Task 13: CLI Runner with Timeout/Cancellation
+
+### Completed
+- Created `internal/agent/auth_runner.go` with `AuthRunner` interface and `AuthCommandRunner` implementation
+- Created `internal/agent/auth_runner_test.go` with 7 comprehensive tests
+- Implemented timeout support with `exec.CommandContext` and context deadline detection
+- Separate stdout/stderr capture using `bytes.Buffer`
+- Exit code extraction from `exec.ExitError`
+- Safe cleanup with no goroutine leaks (CommandContext handles process termination)
+- MockAuthRunner for testing
+- All tests pass with `-race` flag enabled
+
+### AuthRunner Interface
+
+```go
+type AuthRunResult struct {
+    Stdout   string
+    Stderr   string
+    ExitCode int
+    Err      error
+    TimedOut bool
+}
+
+type AuthRunner interface {
+    RunAuthCheck(ctx context.Context, command []string) AuthRunResult
+}
+```
+
+### AuthCommandRunner Implementation
+
+- `timeout time.Duration` - configurable timeout (default 10s)
+- `logger *zap.Logger` - structured logging
+- `NewAuthCommandRunner(timeout, logger)` constructor
+- `RunAuthCheck(ctx, command)` method:
+  - Creates timeout context via `context.WithTimeout`
+  - Uses `exec.CommandContext` for process management
+  - Captures stdout/stderr separately via `bytes.Buffer`
+  - Detects timeout via `context.DeadlineExceeded`
+  - Extracts exit code from `exec.ExitError`
+  - Trims output to remove trailing newlines
+
+### Test Coverage
+
+1. **TestAuthRunnerShortCommand**: `echo hello` → stdout="hello", exit=0, no error
+2. **TestAuthRunnerTimeout**: `sleep 30` with 100ms timeout → TimedOut=true, error set
+3. **TestAuthRunnerExitCode**: `sh -c "exit 42"` → exit=42, error set
+4. **TestAuthRunnerStderr**: `sh -c "echo error >&2"` → stderr captured separately
+5. **TestAuthRunnerEmptyCommand**: Empty command array → error, exit=-1
+6. **TestAuthRunnerDefaultTimeout**: Verify default timeout is 10s
+7. **TestMockAuthRunner**: Mock implementation returns configured results
+
+### Key Design Decisions
+
+1. **Separate stdout/stderr**: Unlike `CombinedOutput()` in envcheck.go, auth runner captures them separately for cleaner parsing
+2. **Output trimming**: Removes trailing newlines for consistent test assertions
+3. **Exit code -1 for errors**: Non-zero exit codes extracted from ExitError, -1 for other errors
+4. **Timeout detection**: Uses `context.DeadlineExceeded` check, not just error type
+5. **No goroutine leaks**: `exec.CommandContext` automatically sends SIGKILL on timeout
+6. **MockAuthRunner**: Simple test double for dependency injection
+
+### Integration Points
+
+- Will be used by T14 (opencode parser) for status command execution
+- Will be used by T15 (Claude/Codex adapters) for exit code-based auth checks
+- Separate stdout/stderr enables tool-specific output parsing strategies
+- Timeout prevents hanging on unresponsive tools
+
+### Test Results
+
+- All 7 auth_runner tests pass
+- All 47 agent package tests pass (including existing tests)
+- Race detector: No data races, no goroutine leaks
+- Evidence files:
+  - `.sisyphus/evidence/task-13-runner-pass.txt`
+  - `.sisyphus/evidence/task-13-runner-fail.txt`
+
+### Verification
+
+```bash
+go test ./internal/agent/... -race -count=1 -timeout 60s
+# PASS: ok  	github.com/hal-o-swarm/hal-o-swarm/internal/agent	3.746s
+```
+
+---
+
+## Task 14: Opencode Auth Parser Adapter
+
+### Completed
+- Created `internal/agent/auth_opencode.go` with `OpencodeAuthAdapter` struct
+- Created `internal/agent/auth_opencode_test.go` with 7 test functions (14 subtests)
+- Implements `CheckAuth(ctx) shared.AuthStateReport` using `AuthRunner` + output parsing
+- Uses `GetToolCapability(ToolOpencode)` for status command (`opencode auth list`)
+- All tests pass, zero regressions on full agent suite
+
+### OpencodeAuthAdapter
+
+```go
+type OpencodeAuthAdapter struct {
+    runner AuthRunner
+    logger *zap.Logger
+}
+```
+
+- `NewOpencodeAuthAdapter(runner, logger)` constructor
+- `CheckAuth(ctx)` runs status command via runner, maps result to `AuthStateReport`
+
+### Parsing Strategy
+
+1. **Timeout** → `error` with "command timed out"
+2. **Command not found** (error message contains "not found", "no such file", "executable file not found") → `not_installed`
+3. **Output parsing** (auth-first precedence):
+   - Authenticated indicators: `status: active`, `type: api/oauth/wellknown`, env var names present without "not set"
+   - Unauthenticated indicators: `not authenticated`, `no credentials`, `no stored credentials`, `login required`
+   - Authenticated wins when both detected (e.g., no stored creds but env var set)
+4. **Empty output with exit 0** → `unauthenticated`
+5. **Non-zero exit** → `error` with stderr excerpt
+6. **Unrecognized output** → `error` with "unexpected output format"
+
+### Key Design Decisions
+
+1. **Auth-first precedence**: When both auth and unauth indicators present, authenticated wins. Env var set + "no stored credentials" = still authenticated.
+2. **Removed ambiguous patterns**: Dropped generic "authenticated" and "logged in" from auth indicators — "not authenticated" contains "authenticated" as substring, causing false positives.
+3. **Defensive default**: Unrecognized output returns `error` status, not a guess.
+4. **Env var "not set" exclusion**: `ANTHROPIC_API_KEY` only counts as authenticated if output doesn't also contain "not set", "missing", "empty", or "unset".
+
+### Test Coverage
+
+1. **TestOpencodeAuthParserAuthenticated** (2 subtests): Stored creds active, env var only
+2. **TestOpencodeAuthParserNotInstalled** (3 subtests): exec error, stderr command not found, no such file
+3. **TestOpencodeAuthParserUnauthenticated** (3 subtests): No credentials listed, explicit not-authenticated message, empty output
+4. **TestOpencodeAuthParserTimeout**: Timeout returns error status
+5. **TestOpencodeAuthParserUnrecognizedOutput**: Unknown format returns error
+6. **TestOpencodeAuthParserNonZeroExit**: Non-zero exit with stderr returns error
+7. **TestOpencodeAuthParserEnvVarNotSet**: Env var listed as "not set" is NOT authenticated
+
+### Pitfall Encountered
+
+String pattern matching for auth status requires careful ordering:
+- "Not authenticated" contains "authenticated" — naive substring check gives false positive
+- "No stored credentials" + env var set — unauthenticated check fires first if ordered wrong
+- Solution: Check all indicators, then apply precedence (auth > unauth)
+
+### Evidence
+- `.sisyphus/evidence/task-14-opencode-pass.txt`
+- `.sisyphus/evidence/task-14-opencode-fail.txt`
+
+---
+
+## Task 15: Claude/Codex Status Adapters
+
+### Completed
+- Created `internal/agent/auth_claude.go` with `ClaudeAuthAdapter` struct
+- Created `internal/agent/auth_claude_test.go` with 5 test functions (12 subtests)
+- Created `internal/agent/auth_codex.go` with `CodexAuthAdapter` struct
+- Created `internal/agent/auth_codex_test.go` with 5 test functions (12 subtests)
+- Added `AuthAdapter` interface to `auth_opencode.go` (common contract for all adapters)
+- Added `extractLine` helper to `auth_opencode.go` (shared by Claude and Codex context parsers)
+- All 3 adapters implement `AuthAdapter` interface (verified via compile-time check)
+
+### AuthAdapter Interface
+
+```go
+type AuthAdapter interface {
+    CheckAuth(ctx context.Context) shared.AuthStateReport
+}
+```
+
+All three adapters (`OpencodeAuthAdapter`, `ClaudeAuthAdapter`, `CodexAuthAdapter`) satisfy this interface.
+
+### Exit-Code Strategy (Claude + Codex)
+
+Both Claude and Codex use `exit_code` parsing (simpler than opencode's `output_parse`):
+
+1. **Timeout** → `error` with "command timed out"
+2. **Command not found** (reuses `isCommandNotFound` from opencode) → `not_installed`
+3. **Exit 0** → `authenticated` with optional context from stdout
+4. **Non-zero exit** → `unauthenticated` with "not authenticated"
+
+### Context Parsing
+
+- `parseClaudeContext`: Extracts "Logged in as..." or "Account:" lines from stdout
+- `parseCodexContext`: Extracts "Logged in as..." or "Authenticated as..." lines from stdout
+- Both use `extractLine` + `truncate` helpers shared with opencode adapter
+
+### Key Design Decisions
+
+1. **Exit-code-first**: Unlike opencode (which parses output patterns), Claude/Codex adapters treat exit code as authoritative — exit 0 always means authenticated
+2. **Context is optional**: Stdout context enriches the Reason field but never overrides exit code semantics
+3. **Shared helpers**: `isCommandNotFound`, `truncate`, `extractLine` all live in `auth_opencode.go` to avoid duplication
+4. **Interface compliance**: Compile-time `var _ AuthAdapter = (*XAdapter)(nil)` checks in tests
+
+### Test Coverage
+
+#### Claude (5 tests, 12 subtests)
+- `TestClaudeAuthAdapterAuthenticated`: exit 0 minimal, with "Logged in as", with "Account:"
+- `TestClaudeAuthAdapterUnauthenticated`: exit 1 no output, exit 1 with stderr, exit 2
+- `TestClaudeAuthAdapterNotInstalled`: exec error, stderr command not found, no such file
+- `TestClaudeAuthAdapterTimeout`: timeout returns error
+- `TestClaudeAuthAdapterImplementsInterface`: compile-time interface check
+
+#### Codex (5 tests, 12 subtests)
+- `TestCodexAuthAdapterAuthenticated`: exit 0 minimal, with "Logged in as", with "Authenticated as"
+- `TestCodexAuthAdapterUnauthenticated`: exit 1 no output, exit 1 with stderr, exit 2
+- `TestCodexAuthAdapterNotInstalled`: exec error, stderr command not found, no such file
+- `TestCodexAuthAdapterTimeout`: timeout returns error
+- `TestCodexAuthAdapterImplementsInterface`: compile-time interface check
+
+### Verification
+- `go test ./internal/agent/... -count=1 -timeout 60s` passes (zero regressions)
+- No LSP errors in any changed files
+- Evidence files:
+  - `.sisyphus/evidence/task-15-adapter-pass.txt`
+  - `.sisyphus/evidence/task-15-adapter-fail.txt`
+
+---
+
+## Task 16: Agent Periodic Auth-State Reporter
+
+### Completed
+- Added `internal/agent/auth_reporter.go` with `AuthReporter` and `AuthStateSender` abstraction
+- Added `WSAuthStateSender` to encode auth-state updates into protocol envelope and send via `SendEnvelope`
+- Added `internal/agent/auth_reporter_test.go` with periodic, initial, failure-survival, and change-detection coverage
+- Added evidence files:
+  - `.sisyphus/evidence/task-16-report-pass.txt`
+  - `.sisyphus/evidence/task-16-report-fail.txt`
+
+### AuthReporter Behavior
+- Runs all configured adapters on startup (immediate initial report) and then every configured interval via ticker
+- Always emits auth-state payload on each check
+- Tracks `lastState` by tool and detects status transitions per check
+- Continues reporting even when one adapter fails
+
+### Failure Handling
+- Adapter panics are recovered per-adapter so one bad adapter does not break the full check cycle
+- Panic/nil/invalid adapter outcomes are normalized to `AuthStatusError`
+- Other adapters in the same cycle still produce normal reports
+
+### Message Contract
+- Envelope type: `MessageTypeAuthState` (`"auth_state"`)
+- Envelope payload: JSON array of `AuthStateReport`
+- Envelope version/timestamp follow shared protocol conventions (`ProtocolVersion`, UTC Unix timestamp)
+
+### Tests Added
+- `TestAuthReporterPeriodicReport`: validates periodic emissions at short interval
+- `TestAuthReporterSurvivesAdapterFailure`: validates one failing adapter does not block others/reporting loop
+- `TestAuthReporterInitialReport`: validates immediate startup report
+- `TestAuthReporterChangeDetection`: validates status transition is reflected on subsequent check
+- `TestWSAuthStateSenderUsesAuthStateEnvelope`: validates envelope type/payload wiring
+
+### Verification
+- `go test ./internal/agent/... -count=1 -timeout 60s` passes
+- `go test ./internal/agent/... -race -count=1 -timeout 60s` passes

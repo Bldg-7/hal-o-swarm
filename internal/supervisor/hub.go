@@ -242,6 +242,23 @@ func (h *Hub) reconcileCredentialSync(payload []byte) {
 	}
 }
 
+func (h *Hub) reconcileAuthState(nodeID string, payload []byte) {
+	h.mu.RLock()
+	registry := h.credentialRegistry
+	h.mu.RUnlock()
+
+	if registry == nil {
+		return
+	}
+
+	if err := registry.HandleAuthStateMessage(nodeID, payload); err != nil {
+		h.logger.Warn("auth state ingest failed",
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+	}
+}
+
 func (h *Hub) checkHeartbeats() {
 	timeout := h.heartbeatInterval * time.Duration(h.heartbeatTimeout)
 	now := time.Now()

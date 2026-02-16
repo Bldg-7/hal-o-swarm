@@ -69,16 +69,25 @@ func (c *AgentConn) readPump() {
 			continue
 		}
 
-		if env.Type == string(shared.MessageTypeHeartbeat) {
-			c.mu.Lock()
-			c.lastHeartbeat = time.Now()
-			c.mu.Unlock()
-			continue
-		}
+		c.handleEnvelope(env)
+	}
+}
 
-		if env.Type == string(shared.MessageTypeCredentialSync) {
-			c.hub.reconcileCredentialSync(env.Payload)
-		}
+func (c *AgentConn) handleEnvelope(env *shared.Envelope) {
+	if env.Type == string(shared.MessageTypeHeartbeat) {
+		c.mu.Lock()
+		c.lastHeartbeat = time.Now()
+		c.mu.Unlock()
+		return
+	}
+
+	if env.Type == string(shared.MessageTypeCredentialSync) {
+		c.hub.reconcileCredentialSync(env.Payload)
+		return
+	}
+
+	if env.Type == string(shared.MessageTypeAuthState) {
+		c.hub.reconcileAuthState(c.agentID, env.Payload)
 	}
 }
 

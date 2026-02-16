@@ -417,77 +417,77 @@ Max Concurrent: 6
     Evidence: .sisyphus/evidence/task-6-registry-fail.txt
   ```
 
-- [ ] 7. Credential push command contract
+- [x] 7. Credential push command contract
   - **What to do**: add command type + payload schema for agent-scoped credentials and version.
   - **References**: `internal/supervisor/command_types.go`, `internal/shared/types.go`, `internal/shared/protocol.go`.
   - **Acceptance Criteria**: invalid payload rejected; valid payload round-trip works.
   - **QA (happy)**: `go test ./internal/shared -run TestCredentialPushEnvelopeRoundTrip -v` -> PASS -> `.sisyphus/evidence/task-7-contract-pass.txt`
   - **QA (error)**: `go test ./internal/shared -run TestCredentialPushRejectsInvalidPayload -v` -> PASS -> `.sisyphus/evidence/task-7-contract-fail.txt`
 
-- [ ] 8. Credential push command issuance endpoint
+- [x] 8. Credential push command issuance endpoint
   - **What to do**: add supervisor API route to dispatch credential push to a target node.
   - **References**: `internal/supervisor/http_api.go`, `internal/supervisor/command_dispatcher.go`.
   - **Acceptance Criteria**: authorized request dispatches; unauthorized request returns 401.
   - **QA (happy)**: `curl -X POST /api/v1/commands/credentials/push` returns `queued` -> `.sisyphus/evidence/task-8-api-pass.json`
   - **QA (error)**: missing bearer token returns 401 -> `.sisyphus/evidence/task-8-api-fail.json`
 
-- [ ] 9. Agent credential apply module
+- [x] 9. Agent credential apply module
   - **What to do**: apply pushed env credentials to agent runtime scope and mask values in logs.
   - **References**: `internal/agent/wsclient.go`, `internal/agent/provision.go`, `internal/agent/agent.go`.
   - **Acceptance Criteria**: pushed credentials become available to tool subprocess context.
   - **QA (happy)**: `go test ./internal/agent -run TestCredentialApplySetsRuntimeEnv -v` -> `.sisyphus/evidence/task-9-apply-pass.txt`
   - **QA (error)**: malformed payload ignored with error event (no panic) -> `.sisyphus/evidence/task-9-apply-fail.txt`
 
-- [ ] 10. Credential push idempotency and replay safety
+- [x] 10. Credential push idempotency and replay safety
   - **What to do**: enforce idempotency by `command_id`; duplicate push must not re-apply side effects.
   - **References**: `internal/supervisor/command_dispatcher.go`, `internal/storage/` idempotency tables.
   - **Acceptance Criteria**: duplicate requests return original outcome.
   - **QA (happy)**: duplicate same id returns cached success -> `.sisyphus/evidence/task-10-idem-pass.txt`
   - **QA (error)**: same id with different payload rejected deterministically -> `.sisyphus/evidence/task-10-idem-fail.txt`
 
-- [ ] 11. Secure audit integration for push commands
+- [x] 11. Secure audit integration for push commands
   - **What to do**: ensure push command audits actor/action/result with fully redacted args.
   - **References**: `internal/supervisor/audit.go`, `internal/supervisor/security.go`, `internal/storage/migrations/`.
   - **Acceptance Criteria**: audit row exists with no plaintext secrets.
   - **QA (happy)**: audit contains push event metadata -> `.sisyphus/evidence/task-11-audit-pass.txt`
   - **QA (error)**: secret leakage assertion test fails if plaintext present -> `.sisyphus/evidence/task-11-audit-fail.txt`
 
-- [ ] 12. Reconnect credential reconciliation policy
+- [x] 12. Reconnect credential reconciliation policy
   - **What to do**: on reconnect, compare expected credential version and mark drift/reapply policy.
   - **References**: `internal/agent/wsclient.go`, `internal/supervisor/hub.go`, `internal/supervisor/registry.go`.
   - **Acceptance Criteria**: reconnect after disconnect converges to expected credential version.
   - **QA (happy)**: forced disconnect/reconnect ends in `in_sync` -> `.sisyphus/evidence/task-12-reconcile-pass.txt`
   - **QA (error)**: version mismatch yields `drift_detected` event -> `.sisyphus/evidence/task-12-reconcile-fail.txt`
 
-- [ ] 13. CLI runner with timeout/cancellation
+- [x] 13. CLI runner with timeout/cancellation
   - **What to do**: add reusable command runner for auth checks with timeout and safe stderr capture.
   - **References**: `internal/agent/envcheck.go` (`CommandRunner` pattern).
   - **Acceptance Criteria**: timed-out tool command yields `error` status, no goroutine leak.
   - **QA (happy)**: short command finishes within timeout -> `.sisyphus/evidence/task-13-runner-pass.txt`
   - **QA (error)**: hanging command canceled at timeout -> `.sisyphus/evidence/task-13-runner-fail.txt`
 
-- [ ] 14. opencode auth list parser adapter
+- [x] 14. opencode auth list parser adapter
   - **What to do**: execute `opencode auth list` and map output to canonical auth state.
   - **References**: new adapter in `internal/agent/` + fixtures.
   - **Acceptance Criteria**: parser handles stored-credential and env-var sections.
   - **QA (happy)**: fixture output maps to `authenticated` -> `.sisyphus/evidence/task-14-opencode-pass.txt`
   - **QA (error)**: command-not-found maps to `not_installed` -> `.sisyphus/evidence/task-14-opencode-fail.txt`
 
-- [ ] 15. Claude/Codex status adapters
+- [x] 15. Claude/Codex status adapters
   - **What to do**: execute `claude auth status` and `codex login --status`, map exit code/status text.
   - **References**: new adapters in `internal/agent/`.
   - **Acceptance Criteria**: exit-code mapping deterministic for both tools.
   - **QA (happy)**: mocked exit 0 maps `authenticated` -> `.sisyphus/evidence/task-15-adapter-pass.txt`
   - **QA (error)**: non-zero and timeout map `unauthenticated|error` -> `.sisyphus/evidence/task-15-adapter-fail.txt`
 
-- [ ] 16. Agent periodic auth-state reporter
+- [x] 16. Agent periodic auth-state reporter
   - **What to do**: schedule auth checks, emit auth-state message on interval and on change.
   - **References**: `internal/agent/wsclient.go`, `internal/shared/types.go`.
   - **Acceptance Criteria**: initial report on connect + periodic report every configured interval.
   - **QA (happy)**: integration test receives periodic auth-state events -> `.sisyphus/evidence/task-16-report-pass.txt`
   - **QA (error)**: reporter survives one adapter failure and continues -> `.sisyphus/evidence/task-16-report-fail.txt`
 
-- [ ] 17. Supervisor auth-state ingest and projection
+- [x] 17. Supervisor auth-state ingest and projection
   - **What to do**: ingest auth-state messages and project per-node status to registry/API model.
   - **References**: `internal/supervisor/hub.go`, `internal/supervisor/registry.go`, `internal/supervisor/http_api.go`.
   - **Acceptance Criteria**: latest auth state visible for node without secret fields.
