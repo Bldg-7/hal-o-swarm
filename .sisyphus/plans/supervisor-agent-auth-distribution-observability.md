@@ -494,28 +494,28 @@ Max Concurrent: 6
   - **QA (happy)**: posted auth-state updates node projection -> `.sisyphus/evidence/task-17-ingest-pass.txt`
   - **QA (error)**: malformed auth-state ignored with warning -> `.sisyphus/evidence/task-17-ingest-fail.txt`
 
-- [ ] 18. HTTP auth status/drift endpoints
+- [x] 18. HTTP auth status/drift endpoints
   - **What to do**: add `/api/v1/nodes/{id}/auth` and drift list endpoint.
   - **References**: `internal/supervisor/http_api.go`.
   - **Acceptance Criteria**: endpoints return stable JSON schema and proper auth enforcement.
   - **QA (happy)**: authorized GET returns auth status map -> `.sisyphus/evidence/task-18-http-pass.json`
   - **QA (error)**: unknown node returns 404 with structured error -> `.sisyphus/evidence/task-18-http-fail.json`
 
-- [ ] 19. halctl auth status commands
+- [x] 19. halctl auth status commands
   - **What to do**: add `halctl auth status <node-id>` and optional list/drift command.
   - **References**: `internal/halctl/client.go`, `cmd/halctl/main.go`.
   - **Acceptance Criteria**: command prints parseable status table/json.
   - **QA (happy)**: `halctl auth status node-1` returns expected fields -> `.sisyphus/evidence/task-19-halctl-pass.txt`
   - **QA (error)**: invalid node id returns non-zero with clear message -> `.sisyphus/evidence/task-19-halctl-fail.txt`
 
-- [ ] 20. Remote OAuth orchestration for supported tools
+- [x] 20. Remote OAuth orchestration for supported tools
   - **What to do**: implement remote trigger workflow only for supported flows (Codex device auth, opencode provider flows that support device/headless).
   - **References**: new orchestration handlers in `internal/supervisor/` and `internal/agent/`.
   - **Acceptance Criteria**: workflow emits URL+code challenge event and terminal success/failure state.
   - **QA (happy)**: mocked device flow emits challenge and completion -> `.sisyphus/evidence/task-20-oauth-pass.txt`
   - **QA (error)**: unsupported provider returns `manual_required` immediately -> `.sisyphus/evidence/task-20-oauth-fail.txt`
 
-- [ ] 21. Manual-required workflow for unsupported OAuth
+- [x] 21. Manual-required workflow for unsupported OAuth
   - **What to do**: define and emit standardized manual guidance event (SSH login steps) for unsupported remote OAuth cases.
   - **References**: `internal/supervisor/` notification/event path, `docs/RUNBOOK.md`.
   - **Acceptance Criteria**: operators receive explicit steps and reason code.

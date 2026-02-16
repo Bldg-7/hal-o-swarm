@@ -858,6 +858,180 @@ func TestCredentialPushIdempotency(t *testing.T) {
 	}
 }
 
+func TestHandleNodeAuth(t *testing.T) {
+	api, registry, _ := setupHTTPAPI(t)
+	handler := api.Handler()
+
+	seedNode(t, registry, "node-auth-1", "host-auth-1")
+
+	states := map[string]NodeAuthState{
+		"opencode": {
+			Tool:      "opencode",
+			Status:    "authenticated",
+			Reason:    "api key set",
+			CheckedAt: time.Now().UTC().Truncate(time.Second),
+		},
+		"claude_code": {
+			Tool:      "claude_code",
+			Status:    "unauthenticated",
+			Reason:    "no credentials",
+			CheckedAt: time.Now().UTC().Truncate(time.Second),
+		},
+	}
+	if err := registry.UpdateAuthState("node-auth-1", states); err != nil {
+		t.Fatalf("update auth state: %v", err)
+	}
+
+	// Set credential sync status via reconciliation
+	if err := registry.ReconcileCredentialVersion("node-auth-1", 3, 3); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	req := authRequest("GET", "/api/v1/nodes/node-auth-1/auth", "")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data nodeAuthJSON `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.Data.NodeID != "node-auth-1" {
+		t.Errorf("expected node-auth-1, got %s", resp.Data.NodeID)
+	}
+	if len(resp.Data.AuthStates) != 2 {
+		t.Fatalf("expected 2 auth states, got %d", len(resp.Data.AuthStates))
+	}
+	if resp.Data.AuthStates["opencode"].Status != "authenticated" {
+		t.Errorf("expected opencode authenticated, got %s", resp.Data.AuthStates["opencode"].Status)
+	}
+	if resp.Data.AuthStates["claude_code"].Status != "unauthenticated" {
+		t.Errorf("expected claude_code unauthenticated, got %s", resp.Data.AuthStates["claude_code"].Status)
+	}
+	if resp.Data.CredentialSync != CredentialSyncStatusInSync {
+		t.Errorf("expected in_sync, got %s", resp.Data.CredentialSync)
+	}
+	if resp.Data.CredentialVersion != 3 {
+		t.Errorf("expected version 3, got %d", resp.Data.CredentialVersion)
+	}
+}
+
+func TestHandleNodeAuthNotFound(t *testing.T) {
+	api, _, _ := setupHTTPAPI(t)
+	handler := api.Handler()
+
+	req := authRequest("GET", "/api/v1/nodes/nonexistent/auth", "")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+
+	var errResp apiError
+	json.NewDecoder(w.Body).Decode(&errResp)
+	if errResp.Code != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND, got %s", errResp.Code)
+	}
+}
+
+func TestHandleNodeAuthUnauthorized(t *testing.T) {
+	api, _, _ := setupHTTPAPI(t)
+	handler := api.Handler()
+
+	req := httptest.NewRequest("GET", "/api/v1/nodes/some-node/auth", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+
+	var errResp apiError
+	json.NewDecoder(w.Body).Decode(&errResp)
+	if errResp.Code != "AUTH_REQUIRED" {
+		t.Errorf("expected AUTH_REQUIRED, got %s", errResp.Code)
+	}
+}
+
+func TestHandleAuthDrift(t *testing.T) {
+	api, registry, _ := setupHTTPAPI(t)
+	handler := api.Handler()
+
+	// node-drift-1: drift_detected
+	seedNode(t, registry, "node-drift-1", "host-drift-1")
+	if err := registry.ReconcileCredentialVersion("node-drift-1", 1, 2); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// node-sync-1: in_sync
+	seedNode(t, registry, "node-sync-1", "host-sync-1")
+	if err := registry.ReconcileCredentialVersion("node-sync-1", 2, 2); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// node-drift-2: drift_detected
+	seedNode(t, registry, "node-drift-2", "host-drift-2")
+	if err := registry.ReconcileCredentialVersion("node-drift-2", 0, 2); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// node-unknown: unknown (default, no reconciliation)
+	seedNode(t, registry, "node-unknown", "host-unknown")
+
+	req := authRequest("GET", "/api/v1/auth/drift", "")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data []driftNodeJSON `json:"data"`
+		Meta *apiMeta        `json:"meta"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if resp.Meta == nil {
+		t.Fatal("expected meta to be present")
+	}
+	if resp.Meta.Total != 2 {
+		t.Fatalf("expected 2 drifted nodes, got %d", resp.Meta.Total)
+	}
+	if len(resp.Data) != 2 {
+		t.Fatalf("expected 2 drift entries, got %d", len(resp.Data))
+	}
+
+	driftIDs := make(map[string]bool)
+	for _, d := range resp.Data {
+		driftIDs[d.NodeID] = true
+		if d.CredentialSync != CredentialSyncStatusDriftDetected {
+			t.Errorf("expected drift_detected for %s, got %s", d.NodeID, d.CredentialSync)
+		}
+	}
+	if !driftIDs["node-drift-1"] {
+		t.Error("expected node-drift-1 in drift list")
+	}
+	if !driftIDs["node-drift-2"] {
+		t.Error("expected node-drift-2 in drift list")
+	}
+	if driftIDs["node-sync-1"] {
+		t.Error("node-sync-1 should not be in drift list")
+	}
+	if driftIDs["node-unknown"] {
+		t.Error("node-unknown should not be in drift list")
+	}
+}
+
 func TestCredentialPushIdempotencyDifferentPayload(t *testing.T) {
 	db := setupSupervisorTestDB(t)
 	logger := zap.NewNop()

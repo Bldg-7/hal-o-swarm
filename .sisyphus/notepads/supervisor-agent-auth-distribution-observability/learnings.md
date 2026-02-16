@@ -903,3 +903,309 @@ Both Claude and Codex use `exit_code` parsing (simpler than opencode's `output_p
 ### Verification
 - `go test ./internal/agent/... -count=1 -timeout 60s` passes
 - `go test ./internal/agent/... -race -count=1 -timeout 60s` passes
+
+---
+
+## Task 18: HTTP Auth Status/Drift Endpoints
+
+### Completed
+- Added `GET /api/v1/nodes/{id}/auth` route returning auth status for a specific node
+- Added `GET /api/v1/auth/drift` route returning nodes with credential drift
+- Both routes protected by `requireAuth` middleware
+- Added `handleNodeAuth` and `handleAuthDrift` handlers in `http_api.go`
+- Added 4 tests: TestHandleNodeAuth, TestHandleNodeAuthNotFound, TestHandleNodeAuthUnauthorized, TestHandleAuthDrift
+
+### Endpoint Contracts
+
+#### GET /api/v1/nodes/{id}/auth
+- **Auth**: Bearer token required (401 if missing)
+- **Success 200**: `{"data": {"node_id": "...", "auth_states": {...}, "credential_sync": "in_sync|drift_detected|unknown", "credential_version": N}}`
+- **Not Found 404**: `{"error": "node not found", "code": "NOT_FOUND"}`
+
+#### GET /api/v1/auth/drift
+- **Auth**: Bearer token required (401 if missing)
+- **Success 200**: `{"data": [{"node_id": "...", "credential_sync": "drift_detected", "credential_version": N}], "meta": {"total": N}}`
+
+### Response Types
+- `nodeAuthJSON`: node_id, auth_states (map[string]NodeAuthState), credential_sync, credential_version
+- `driftNodeJSON`: node_id, credential_sync, credential_version
+
+### Key Design Decisions
+1. **Route ordering**: `/nodes/{id}/auth` after `/nodes/{id}` — Go 1.22 mux longest-match routing
+2. **Empty auth states**: `GetAuthState` returns empty map (never nil) for nodes without auth state
+3. **Drift filter**: Only `CredSyncStatus == drift_detected`; excludes `unknown` and `in_sync`
+4. **No secrets**: NodeAuthState contains only status metadata
+
+### Test Results
+- All 4 new tests pass, full supervisor suite passes (zero regressions)
+- Evidence: `.sisyphus/evidence/task-18-http-pass.json`, `.sisyphus/evidence/task-18-http-fail.json`
+
+---
+
+## Task 19: Halctl Auth Status Commands
+
+### Completed
+- Added `NodeAuthStatus`, `AuthState`, `DriftNode` types to `internal/halctl/client.go`
+- Added `GetNodeAuth(client, nodeID)` and `GetAuthDrift(client)` client methods
+- Added `GetAuthStatus()` and `GetDrift()` wrapper functions in `internal/halctl/auth.go`
+- Added `FormatAuthStatusTable()` and `FormatDriftTable()` formatters for table output
+- Added `handleAuth()` command handler to `cmd/halctl/main.go` with `status` and `drift` subcommands
+- Updated help text to document new auth commands
+- Created 16 comprehensive tests in `internal/halctl/auth_test.go`
+
+### Command Interface
+
+#### `halctl auth status <node-id>`
+- Calls `GET /api/v1/nodes/{id}/auth`
+- Table output:
+  ```
+  Node: node-1
+  Credential Sync: in_sync
+  Credential Version: 1
+  
+  Tool            Status              Reason
+  ----            ------              ------
+  opencode        authenticated       API key configured
+  claude_code     unauthenticated     No credentials found
+  ```
+- JSON output: `--format json` flag
+- Error handling: 404 → "resource not found: node not found", 401 → "authentication failed"
+
+#### `halctl auth drift`
+- Calls `GET /api/v1/auth/drift`
+- Table output:
+  ```
+  Node ID         Sync Status       Version
+  -------         -----------       -------
+  node-1          drift_detected    0
+  node-3          drift_detected    1
+  
+  Total: 2 nodes with credential drift
+  ```
+- JSON output: `--format json` flag
+- Handles empty drift list gracefully
+
+### Client Types
+
+```go
+type NodeAuthStatus struct {
+    NodeID            string                 `json:"node_id"`
+    AuthStates        map[string]AuthState   `json:"auth_states"`
+    CredentialSync    string                 `json:"credential_sync"`
+    CredentialVersion int                    `json:"credential_version"`
+}
+
+type AuthState struct {
+    Tool      string `json:"tool"`
+    Status    string `json:"status"`
+    Reason    string `json:"reason,omitempty"`
+    CheckedAt string `json:"checked_at,omitempty"`
+}
+
+type DriftNode struct {
+    NodeID            string `json:"node_id"`
+    CredentialSync    string `json:"credential_sync"`
+    CredentialVersion int    `json:"credential_version"`
+}
+```
+
+### Test Coverage (16 tests)
+
+1. **GetNodeAuth Tests**:
+   - `TestGetNodeAuthSuccess`: Valid node with multiple auth states
+   - `TestGetNodeAuthNotFound`: 404 error handling
+   - `TestGetNodeAuthUnauthorized`: 401 error handling
+   - `TestGetNodeAuthConnectionError`: Network error handling
+
+2. **GetAuthDrift Tests**:
+   - `TestGetAuthDriftSuccess`: Multiple drifted nodes
+   - `TestGetAuthDriftEmpty`: Empty drift list
+   - `TestGetAuthDriftConnectionError`: Network error handling
+
+3. **Formatter Tests**:
+   - `TestFormatAuthStatusTable`: Table formatting with auth states
+   - `TestFormatAuthStatusTableEmpty`: Table with no auth states
+   - `TestFormatDriftTable`: Drift table formatting
+   - `TestFormatDriftTableEmpty`: Empty drift table
+
+4. **Edge Cases**:
+   - `TestAuthStateWithoutReason`: Missing reason field
+   - `TestAuthStatusWithDriftDetected`: Drift status display
+   - `TestAuthStateCheckedAt`: Timestamp handling
+
+5. **Wrapper Functions**:
+   - `TestGetAuthStatusWrapper`: GetAuthStatus() wrapper
+   - `TestGetDriftWrapper`: GetDrift() wrapper
+
+### Key Design Decisions
+
+1. **Separate wrapper functions**: `GetAuthStatus()` and `GetDrift()` wrap `GetNodeAuth()` and `GetAuthDrift()` for consistency with existing halctl patterns (e.g., `GetSession()` wraps client methods)
+
+2. **Table formatting**: Custom formatters instead of tabwriter for consistency with existing halctl output (e.g., `FormatAuthStatusTable()` matches style of `printSessionsTable()`)
+
+3. **Error propagation**: Client errors bubble up to CLI handler which prints to stderr and exits with code 1
+
+4. **Empty state handling**: 
+   - Empty auth states: displays "(no auth states reported)"
+   - Empty drift list: displays "(no nodes with credential drift)" and "Total: 0"
+
+5. **JSON support**: Both commands support `--format json` flag for machine-readable output
+
+### Verification
+
+- `go test ./internal/halctl/... -count=1 -timeout 60s` passes (16 new tests + 24 existing tests = 40 total)
+- `go test ./internal/... -count=1 -timeout 60s` passes (zero regressions across all packages)
+- Evidence files:
+  - `.sisyphus/evidence/task-19-halctl-pass.txt` (all 40 tests pass)
+  - `.sisyphus/evidence/task-19-halctl-fail.txt` (error handling verification)
+
+---
+
+## Task 20: Remote OAuth Orchestration for Supported Flows
+
+### Completed
+- Added `CommandTypeOAuthTrigger = "oauth_trigger"` in `internal/supervisor/command_types.go`
+- Extended `ParseCommandIntent()` aliases and `IsSupportedCommandType()` to include OAuth trigger commands
+- Added `internal/supervisor/oauth_orchestrator.go` with `OAuthOrchestrator` and `TriggerOAuth(ctx, nodeID, tool)`
+- Added `POST /api/v1/oauth/trigger` endpoint in `internal/supervisor/http_api.go`
+- Added agent-side OAuth trigger execution scaffold in `internal/agent/oauth_trigger.go`
+- Added supervisor tests in `internal/supervisor/oauth_orchestrator_test.go`
+- Added agent tests in `internal/agent/oauth_trigger_test.go`
+
+### Orchestration Behavior
+1. Supervisor checks capability via `agent.GetToolCapability()` using tool ID from `shared.ToolIdentifier`
+2. If capability is missing, `RemoteOAuth=false`, or `device_code` flow is absent:
+   - return `OAuthResult{status:"manual_required", reason:"...manual hint..."}`
+   - no command dispatch occurs
+3. If supported (codex/opencode device code):
+   - dispatch `oauth_trigger` command to target node with args `{tool: <tool>}`
+   - parse structured JSON output from command result (`challenge`, `success`, `failure`)
+
+### Agent-Side Notes
+- `OAuthTriggerExecutor` validates capability matrix before any command execution
+- Unsupported tools (e.g. `claude_code`) return `manual_required` immediately
+- Supported tools use device auth command contract:
+  - codex: `codex login --device-auth`
+  - opencode: `opencode auth login --device-code` (stub/contract path)
+- Real provider OAuth is intentionally not executed in tests; handler supports stub mode when runner is nil
+
+### Tests Added
+- `TestOAuthOrchestrationSupported`: codex dispatch returns challenge URL/code
+- `TestOAuthOrchestrationUnsupported`: claude_code returns `manual_required` and does not dispatch
+- `TestOAuthTriggerEndpoint`: HTTP endpoint wiring and response contract for trigger flow
+
+### Verification
+- `go test ./internal/... -count=1 -timeout 60s` passes
+- Evidence files:
+  - `.sisyphus/evidence/task-20-oauth-pass.txt`
+  - `.sisyphus/evidence/task-20-oauth-fail.txt`
+
+---
+
+## Task 21: Manual-Required Workflow for Unsupported OAuth
+
+### Completed
+- Added `ManualAuthGuidance` struct in `internal/supervisor/manual_auth_guidance.go`
+- Implemented `GenerateManualGuidance(tool, nodeID)` function to create structured guidance
+- Extended `OAuthResult` with `ManualGuidance *ManualAuthGuidance` field
+- Integrated guidance generation into `OAuthOrchestrator.TriggerOAuth()` for `manual_required` path
+- Added comprehensive tests in `internal/supervisor/manual_auth_guidance_test.go`
+- Updated `docs/RUNBOOK.md` with "Manual Authentication Procedures" section
+
+### ManualAuthGuidance Structure
+
+```go
+type ManualAuthGuidance struct {
+    Tool         string   `json:"tool"`
+    ReasonCode   string   `json:"reason_code"`    // "no_remote_oauth", "provider_unsupported"
+    Reason       string   `json:"reason"`          // Human-readable
+    Steps        []string `json:"steps"`           // Ordered steps for operator
+    LoginCommand string   `json:"login_command"`   // e.g., "claude auth login"
+    NodeID       string   `json:"node_id"`
+}
+```
+
+### Guidance Generation Logic
+
+1. **Capability Lookup**: Uses `agent.GetToolCapability()` to retrieve tool metadata
+2. **Reason Code Assignment**:
+   - `provider_unsupported`: Tool not in capability matrix
+   - `no_remote_oauth`: Tool exists but `RemoteOAuth=false` or missing device code flow
+3. **Login Command Extraction**: Parses `ManualLoginHint` to extract command after "run: " prefix
+   - Example: "SSH into agent and run: claude auth login" → "claude auth login"
+   - Fallback: Uses full hint if no "run: " pattern found
+4. **Step Generation**:
+   - Step 1: SSH instruction with node ID (or generic "target agent server" if nodeID empty)
+   - Step 2: Run login command
+   - Step 3: Follow browser-based authentication flow
+   - Step 4: Verify auth status (if StatusCommand available in capability)
+
+### Integration with OAuthOrchestrator
+
+When `TriggerOAuth` determines manual authentication is required:
+1. Calls `GenerateManualGuidance(tool, nodeID)`
+2. Includes guidance in `OAuthResult.ManualGuidance` field
+3. Returns `status: "manual_required"` with structured guidance
+
+### Test Coverage
+
+1. **TestManualGuidanceEvent**: Claude Code unsupported remote OAuth generates guidance with correct steps and login command
+2. **TestManualGuidanceMissingNode**: Empty nodeID generates safe fallback guidance with generic SSH target
+3. **TestManualGuidanceAllTools**: Verifies guidance generation for all 3 tools (opencode, claude_code, codex)
+4. **TestManualGuidanceUnsupportedTool**: Unknown tool generates `provider_unsupported` reason code
+5. **TestOAuthOrchestratorManualGuidance**: End-to-end test verifying orchestrator includes guidance in result
+
+### RUNBOOK.md Documentation
+
+Added comprehensive "Manual Authentication Procedures" section covering:
+- When manual authentication is required
+- Identifying manual authentication requirements (JSON response format)
+- Manual authentication steps by tool (Claude Code, opencode, Codex)
+- Verifying authentication after manual login
+- Common authentication issues and troubleshooting:
+  - "command not found" errors
+  - Authentication succeeds but supervisor shows "unauthenticated"
+  - Browser-based auth fails with "connection refused"
+  - "credential drift detected" after manual login
+
+### Key Design Decisions
+
+1. **Structured Guidance**: Guidance is a structured object, not just a string, enabling programmatic consumption by CLI/UI
+2. **Node-Aware Steps**: SSH instructions include specific node ID when available, generic fallback when not
+3. **Command Extraction**: Parses ManualLoginHint to extract just the command, removing instructional text
+4. **Status Verification Step**: Automatically includes status verification step using tool's StatusCommand
+5. **Reason Codes**: Machine-readable reason codes enable automated handling and filtering
+
+### Edge Cases Handled
+
+1. **Missing Node ID**: Uses generic "the target agent server" in SSH step
+2. **Unknown Tool**: Returns `provider_unsupported` with fallback command format
+3. **Tools with RemoteOAuth=true**: Handles case where tool supports remote OAuth but guidance is still requested (e.g., for testing or fallback scenarios)
+4. **Empty ManualLoginHint**: Falls back to generic command format
+
+### Test Results
+
+- All 5 manual guidance tests pass
+- All existing supervisor tests pass (zero regressions)
+- Full test suite passes: `go test ./internal/... -count=1 -timeout 60s`
+- Evidence files:
+  - `.sisyphus/evidence/task-21-manual-pass.txt` (test output)
+  - `.sisyphus/evidence/task-21-manual-fail.txt` (full suite output)
+
+### Integration Points
+
+- Operators receive explicit steps and reason code via API response
+- CLI tools can parse guidance and display formatted instructions
+- UI dashboards can render step-by-step guidance
+- Automation scripts can detect `manual_required` and trigger alerts/notifications
+- RUNBOOK.md provides human-readable procedures for operators
+
+### Verification
+
+```bash
+go test ./internal/supervisor/... -run TestManualGuidance -v -count=1 -timeout 60s
+# PASS: All 5 tests pass
+
+go test ./internal/... -count=1 -timeout 60s
+# PASS: All packages pass (zero regressions)
+```

@@ -20,6 +20,7 @@ type HTTPAPI struct {
 	registry      *NodeRegistry
 	tracker       *SessionTracker
 	dispatcher    *CommandDispatcher
+	oauth         *OAuthOrchestrator
 	costs         *CostAggregator
 	db            *sql.DB
 	authToken     string
@@ -46,10 +47,15 @@ func NewHTTPAPI(
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	var oauthOrchestrator *OAuthOrchestrator
+	if dispatcher != nil {
+		oauthOrchestrator = NewOAuthOrchestrator(dispatcher, logger)
+	}
 	return &HTTPAPI{
 		registry:                   registry,
 		tracker:                    tracker,
 		dispatcher:                 dispatcher,
+		oauth:                      oauthOrchestrator,
 		db:                         db,
 		authToken:                  authToken,
 		logger:                     logger,
@@ -70,10 +76,13 @@ func (a *HTTPAPI) Handler() http.Handler {
 	mux.Handle("GET /api/v1/sessions/{id}", a.requireAuth(http.HandlerFunc(a.handleGetSession)))
 	mux.Handle("GET /api/v1/nodes", a.requireAuth(http.HandlerFunc(a.handleListNodes)))
 	mux.Handle("GET /api/v1/nodes/{id}", a.requireAuth(http.HandlerFunc(a.handleGetNode)))
+	mux.Handle("GET /api/v1/nodes/{id}/auth", a.requireAuth(http.HandlerFunc(a.handleNodeAuth)))
+	mux.Handle("GET /api/v1/auth/drift", a.requireAuth(http.HandlerFunc(a.handleAuthDrift)))
 	mux.Handle("GET /api/v1/events", a.requireAuth(http.HandlerFunc(a.handleListEvents)))
 	mux.Handle("GET /api/v1/cost", a.requireAuth(http.HandlerFunc(a.handleCostReport)))
 	mux.Handle("POST /api/v1/commands", a.requireAuth(http.HandlerFunc(a.handleCommand)))
 	mux.Handle("POST /api/v1/commands/credentials/push", a.requireAuth(http.HandlerFunc(a.handleCredentialPush)))
+	mux.Handle("POST /api/v1/oauth/trigger", a.requireAuth(http.HandlerFunc(a.handleOAuthTrigger)))
 
 	return mux
 }
@@ -88,6 +97,10 @@ func (a *HTTPAPI) SetHealthChecker(hc *HealthChecker) {
 
 func (a *HTTPAPI) SetAuditLogger(al *AuditLogger) {
 	a.auditLogger = al
+}
+
+func (a *HTTPAPI) SetOAuthOrchestrator(orchestrator *OAuthOrchestrator) {
+	a.oauth = orchestrator
 }
 
 type apiResponse struct {
@@ -325,6 +338,64 @@ func (a *HTTPAPI) handleGetNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{Data: toNodeJSON(node)})
 }
 
+type nodeAuthJSON struct {
+	NodeID            string                   `json:"node_id"`
+	AuthStates        map[string]NodeAuthState `json:"auth_states"`
+	CredentialSync    CredentialSyncStatus     `json:"credential_sync"`
+	CredentialVersion int                      `json:"credential_version"`
+}
+
+func (a *HTTPAPI) handleNodeAuth(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	node, err := a.registry.GetNode(id)
+	if err != nil {
+		if err == ErrNodeNotFound {
+			writeError(w, http.StatusNotFound, "node not found", "NOT_FOUND")
+			return
+		}
+		a.logger.Error("get node failed", zap.String("node_id", id), zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return
+	}
+
+	authStates := a.registry.GetAuthState(id)
+
+	writeJSON(w, http.StatusOK, apiResponse{
+		Data: nodeAuthJSON{
+			NodeID:            node.ID,
+			AuthStates:        authStates,
+			CredentialSync:    node.CredSyncStatus,
+			CredentialVersion: node.CredVersion,
+		},
+	})
+}
+
+type driftNodeJSON struct {
+	NodeID            string               `json:"node_id"`
+	CredentialSync    CredentialSyncStatus `json:"credential_sync"`
+	CredentialVersion int                  `json:"credential_version"`
+}
+
+func (a *HTTPAPI) handleAuthDrift(w http.ResponseWriter, r *http.Request) {
+	nodes := a.registry.ListNodes()
+
+	drifted := make([]driftNodeJSON, 0)
+	for _, n := range nodes {
+		if n.CredSyncStatus == CredentialSyncStatusDriftDetected {
+			drifted = append(drifted, driftNodeJSON{
+				NodeID:            n.ID,
+				CredentialSync:    n.CredSyncStatus,
+				CredentialVersion: n.CredVersion,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{
+		Data: drifted,
+		Meta: &apiMeta{Total: len(drifted)},
+	})
+}
+
 type eventJSON struct {
 	ID        string          `json:"id"`
 	SessionID string          `json:"session_id"`
@@ -416,6 +487,11 @@ type commandResultJSON struct {
 	Output    string        `json:"output"`
 	Error     string        `json:"error,omitempty"`
 	Timestamp time.Time     `json:"timestamp"`
+}
+
+type oauthTriggerRequest struct {
+	NodeID string                `json:"node_id"`
+	Tool   shared.ToolIdentifier `json:"tool"`
 }
 
 func (a *HTTPAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -569,6 +645,41 @@ func (a *HTTPAPI) handleCredentialPush(w http.ResponseWriter, r *http.Request) {
 			Timestamp: result.Timestamp,
 		},
 	})
+}
+
+func (a *HTTPAPI) handleOAuthTrigger(w http.ResponseWriter, r *http.Request) {
+	if a.oauth == nil {
+		writeError(w, http.StatusServiceUnavailable, "oauth orchestrator unavailable", "SERVICE_UNAVAILABLE")
+		return
+	}
+
+	var req oauthTriggerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		return
+	}
+
+	if strings.TrimSpace(req.NodeID) == "" {
+		writeError(w, http.StatusBadRequest, "node_id is required", "BAD_REQUEST")
+		return
+	}
+	if strings.TrimSpace(string(req.Tool)) == "" {
+		writeError(w, http.StatusBadRequest, "tool is required", "BAD_REQUEST")
+		return
+	}
+
+	result, err := a.oauth.TriggerOAuth(r.Context(), req.NodeID, req.Tool)
+	if err != nil {
+		a.logger.Error("oauth trigger failed",
+			zap.String("node_id", req.NodeID),
+			zap.String("tool", string(req.Tool)),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusInternalServerError, "oauth trigger failed", "DISPATCH_ERROR")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{Data: result})
 }
 
 func (a *HTTPAPI) credentialPushIdempotencyGet(key string) (*CommandResult, bool) {

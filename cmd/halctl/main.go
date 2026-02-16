@@ -45,6 +45,8 @@ func main() {
 		handleCost(client, args[1:])
 	case "env":
 		handleEnv(client, args[1:])
+	case "auth":
+		handleAuth(client, args[1:])
 	case "agentmd":
 		handleAgentMd(client, args[1:])
 	case "help":
@@ -247,6 +249,47 @@ func handleEnv(client *halctl.HTTPClient, args []string) {
 	}
 }
 
+func handleAuth(client *halctl.HTTPClient, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Error: auth command requires subcommand (status, drift)\n")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "status":
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Error: auth status requires node id\n")
+			os.Exit(1)
+		}
+		status, err := halctl.GetAuthStatus(client, args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if *format == "json" {
+			printJSON(status)
+		} else {
+			fmt.Print(halctl.FormatAuthStatusTable(status))
+		}
+
+	case "drift":
+		drifted, err := halctl.GetDrift(client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if *format == "json" {
+			printJSON(drifted)
+		} else {
+			fmt.Print(halctl.FormatDriftTable(drifted))
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "Error: unknown auth subcommand %q\n", args[0])
+		os.Exit(1)
+	}
+}
+
 func handleAgentMd(client *halctl.HTTPClient, args []string) {
 	if len(args) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: agentmd command requires subcommand (diff, sync)\n")
@@ -432,6 +475,9 @@ Commands:
   env status <project>             Get environment status
   env check <project>              Check environment
   env provision <project>          Provision environment
+  
+  auth status <node-id>            Get auth status for a node
+  auth drift                       List nodes with credential drift
   
   agentmd diff <project>           Show AGENT.md diff
   agentmd sync <project>           Sync AGENT.md

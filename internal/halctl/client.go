@@ -162,3 +162,56 @@ func ParseResponse(body []byte, target interface{}) error {
 
 	return nil
 }
+
+// NodeAuthStatus represents the auth status for a node
+type NodeAuthStatus struct {
+	NodeID            string               `json:"node_id"`
+	AuthStates        map[string]AuthState `json:"auth_states"`
+	CredentialSync    string               `json:"credential_sync"`
+	CredentialVersion int                  `json:"credential_version"`
+}
+
+// AuthState represents the auth status of a single tool
+type AuthState struct {
+	Tool      string `json:"tool"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason,omitempty"`
+	CheckedAt string `json:"checked_at,omitempty"`
+}
+
+// DriftNode represents a node with credential drift
+type DriftNode struct {
+	NodeID            string `json:"node_id"`
+	CredentialSync    string `json:"credential_sync"`
+	CredentialVersion int    `json:"credential_version"`
+}
+
+// GetNodeAuth retrieves auth status for a specific node
+func GetNodeAuth(client *HTTPClient, nodeID string) (*NodeAuthStatus, error) {
+	body, err := client.Get("/api/v1/nodes/" + nodeID + "/auth")
+	if err != nil {
+		return nil, err
+	}
+
+	var status NodeAuthStatus
+	if err := ParseResponse(body, &status); err != nil {
+		return nil, err
+	}
+
+	return &status, nil
+}
+
+// GetAuthDrift retrieves nodes with credential drift
+func GetAuthDrift(client *HTTPClient) ([]DriftNode, error) {
+	body, err := client.Get("/api/v1/auth/drift")
+	if err != nil {
+		return nil, err
+	}
+
+	var drifted []DriftNode
+	if err := ParseResponse(body, &drifted); err != nil {
+		return nil, err
+	}
+
+	return drifted, nil
+}

@@ -597,6 +597,252 @@ Escalate to senior operations team if:
 
 ---
 
+## Manual Authentication Procedures
+
+### When Manual Authentication is Required
+
+Manual authentication is required when a tool does not support remote OAuth flows (device code flow). This typically occurs in the following scenarios:
+
+1. **Claude Code**: Does not support device code flow - requires browser-based authentication only
+2. **Network restrictions**: Agent cannot reach OAuth provider endpoints
+3. **Security policies**: Organization requires manual authentication for certain tools
+
+### Identifying Manual Authentication Requirements
+
+When you trigger OAuth for a tool that doesn't support remote flows, the system will return a `manual_required` status with structured guidance:
+
+```json
+{
+  "status": "manual_required",
+  "reason": "Tool 'claude_code' does not support remote OAuth flows",
+  "manual_guidance": {
+    "tool": "claude_code",
+    "reason_code": "no_remote_oauth",
+    "reason": "Tool 'claude_code' does not support remote OAuth flows",
+    "steps": [
+      "SSH into the agent server: ssh user@agent-node-1",
+      "Run the login command: claude auth login",
+      "Follow the browser-based authentication flow",
+      "Verify auth status: claude auth status"
+    ],
+    "login_command": "claude auth login",
+    "node_id": "agent-node-1"
+  }
+}
+```
+
+### Manual Authentication Steps by Tool
+
+#### Claude Code
+
+**Prerequisites**:
+- SSH access to the agent server
+- Browser access from the agent server (or SSH port forwarding)
+
+**Steps**:
+
+```bash
+# 1. SSH into the agent server
+ssh user@agent-node-1
+
+# 2. Run the login command
+claude auth login
+
+# 3. Follow the browser-based authentication flow
+# The command will open a browser or provide a URL to visit
+# Complete the authentication in the browser
+
+# 4. Verify authentication status
+claude auth status
+# Expected output: exit code 0 (authenticated)
+
+# 5. Exit SSH session
+exit
+```
+
+**Troubleshooting**:
+- If browser doesn't open: Copy the URL from the terminal and open it manually
+- If no browser available: Use SSH port forwarding: `ssh -L 8080:localhost:8080 user@agent-node-1`
+- If authentication fails: Check that you have valid Anthropic account credentials
+
+#### opencode
+
+**Prerequisites**:
+- SSH access to the agent server
+- opencode CLI installed on agent
+
+**Steps**:
+
+```bash
+# 1. SSH into the agent server
+ssh user@agent-node-1
+
+# 2. Run the login command
+opencode auth login
+
+# 3. Follow the device code flow or browser-based flow
+# The command will provide instructions
+
+# 4. Verify authentication status
+opencode auth list
+# Expected output: List of authenticated credentials
+
+# 5. Exit SSH session
+exit
+```
+
+**Note**: opencode supports device code flow, so manual authentication is rarely needed. Use remote OAuth trigger when possible.
+
+#### Codex
+
+**Prerequisites**:
+- SSH access to the agent server
+- codex CLI installed on agent
+
+**Steps**:
+
+```bash
+# 1. SSH into the agent server
+ssh user@agent-node-1
+
+# 2. Run the login command with device auth
+codex login --device-auth
+
+# 3. Follow the device code flow
+# The command will display a user code and URL
+# Visit the URL and enter the code
+
+# 4. Verify authentication status
+codex login --status
+# Expected output: exit code 0 (authenticated)
+
+# 5. Exit SSH session
+exit
+```
+
+**Note**: Codex supports device code flow, so manual authentication is rarely needed. Use remote OAuth trigger when possible.
+
+### Verifying Authentication After Manual Login
+
+After completing manual authentication, verify the auth status is reflected in the supervisor:
+
+```bash
+# Check auth status for a specific node
+halctl auth status <node-id>
+
+# Expected output:
+# Node: agent-node-1
+# Credential Sync: in_sync
+# Credential Version: 1
+#
+# Tool            Status              Reason
+# ----            ------              ------
+# claude_code     authenticated       Logged in as user@example.com
+```
+
+If the status doesn't update immediately:
+1. Wait 30-60 seconds for the next auth state report cycle
+2. Check agent logs: `sudo journalctl -u hal-agent -n 50`
+3. Verify agent is connected: `halctl nodes list`
+
+### Common Authentication Issues
+
+#### Issue: "command not found" when running login command
+
+**Diagnosis**:
+```bash
+# Check if tool is installed
+which claude
+which opencode
+which codex
+```
+
+**Resolution**:
+```bash
+# Install the missing tool
+# For Claude Code:
+curl -fsSL https://claude.ai/install.sh | sh
+
+# For opencode:
+# Follow opencode installation instructions
+
+# For Codex:
+# Follow Codex installation instructions
+```
+
+#### Issue: Authentication succeeds but supervisor shows "unauthenticated"
+
+**Diagnosis**:
+```bash
+# Check agent logs for auth state reporting
+sudo journalctl -u hal-agent | grep -i "auth"
+
+# Check if agent is connected
+halctl nodes list
+```
+
+**Resolution**:
+```bash
+# Restart agent to force auth state refresh
+sudo systemctl restart hal-agent
+
+# Wait 30 seconds and check status again
+halctl auth status <node-id>
+```
+
+#### Issue: Browser-based auth fails with "connection refused"
+
+**Diagnosis**:
+- Agent server has no browser installed
+- No X11 forwarding configured
+- Firewall blocking browser connections
+
+**Resolution**:
+
+**Option 1: SSH Port Forwarding**
+```bash
+# Forward local port to agent's localhost
+ssh -L 8080:localhost:8080 user@agent-node-1
+
+# In the SSH session, run login command
+claude auth login
+
+# Browser will open on your local machine
+```
+
+**Option 2: Manual URL Copy**
+```bash
+# Run login command
+claude auth login
+
+# Copy the URL from terminal output
+# Open the URL in a browser on any machine
+# Complete authentication
+```
+
+#### Issue: "credential drift detected" after manual login
+
+**Diagnosis**:
+```bash
+# Check credential sync status
+halctl auth drift
+
+# Expected output:
+# Node ID         Sync Status       Version
+# -------         -----------       -------
+# agent-node-1    drift_detected    0
+```
+
+**Resolution**:
+
+This is expected after manual login. The supervisor's credential version doesn't match the agent's actual credentials. This is informational only and doesn't affect functionality.
+
+To clear the drift status, you can:
+1. Push credentials from supervisor: `POST /api/v1/commands/credentials/push` (if configured)
+2. Ignore the drift (manual auth is still valid)
+
+---
+
 ## Contact Information
 
 - **On-Call Engineer**: See PagerDuty schedule
