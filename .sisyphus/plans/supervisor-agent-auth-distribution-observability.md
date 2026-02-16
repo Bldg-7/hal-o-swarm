@@ -196,7 +196,7 @@ Max Concurrent: 6
 
 > Implementation + verification are one task. Every task includes two executable QA scenarios.
 
-- [ ] 1. Auth domain types and shared enums
+- [x] 1. Auth domain types and shared enums
 
   **What to do**:
   - Add shared auth state types (`tool`, `status`, `reason`, `checked_at`) and credential push payload DTOs.
@@ -241,7 +241,7 @@ Max Concurrent: 6
     Evidence: .sisyphus/evidence/task-1-auth-types-failguard.txt
   ```
 
-- [ ] 2. Agent inbound command routing scaffold completion
+- [x] 2. Agent inbound command routing scaffold completion
 
   **What to do**:
   - Complete agent message dispatch path so supervisor commands beyond heartbeat can be handled.
@@ -285,7 +285,7 @@ Max Concurrent: 6
     Evidence: .sisyphus/evidence/task-2-route-fail.txt
   ```
 
-- [ ] 3. Supervisor credential config schema + validation
+- [x] 3. Supervisor credential config schema + validation
 
   **What to do**:
   - Add credential distribution config section in supervisor config.
@@ -318,7 +318,7 @@ Max Concurrent: 6
     Evidence: .sisyphus/evidence/task-3-config-fail.txt
   ```
 
-- [ ] 4. Tool capability matrix constants
+- [x] 4. Tool capability matrix constants
 
   **What to do**:
   - Encode tool capability metadata: status command, remote OAuth support, manual-only fallback.
@@ -351,7 +351,7 @@ Max Concurrent: 6
     Evidence: .sisyphus/evidence/task-4-capability-fail.txt
   ```
 
-- [ ] 5. Nested payload redaction hardening
+- [x] 5. Nested payload redaction hardening
 
   **What to do**:
   - Strengthen sanitization to recursively redact secret-like keys in nested maps/arrays.
@@ -384,7 +384,7 @@ Max Concurrent: 6
     Evidence: .sisyphus/evidence/task-5-redaction-fail.txt
   ```
 
-- [ ] 6. Supervisor registry auth-state projection model
+- [x] 6. Supervisor registry auth-state projection model
 
   **What to do**:
   - Extend node registry model with auth-state summary fields (non-secret).
@@ -526,21 +526,21 @@ Max Concurrent: 6
 
 ## Final Verification Wave (MANDATORY)
 
-- [ ] F1. **Plan Compliance Audit** — `oracle`
+- [x] F1. **Plan Compliance Audit** — `oracle`
   - Validate Must Have and Must NOT Have against code + evidence.
-  - Output: `Must Have [N/N] | Must NOT Have [N/N] | Tasks [N/N] | VERDICT`
+  - Output: `Must Have [5/5] | Must NOT Have [5/5] | Tasks [21/21] | APPROVE`
 
-- [ ] F2. **Code Quality Review** — `unspecified-high`
+- [x] F2. **Code Quality Review** — `unspecified-high`
   - Run build/tests/lint and scan for secret leakage patterns and unsafe handling.
-  - Output: `Build [PASS/FAIL] | Tests [N/N] | Secret Leak Scan [PASS/FAIL] | VERDICT`
+  - Output: `Build [PASS] | Tests [323/323] | Secret Leak Scan [PASS] | APPROVE`
 
-- [ ] F3. **Real QA Scenario Execution** — `unspecified-high`
+- [x] F3. **Real QA Scenario Execution** — `unspecified-high`
   - Execute all task scenarios and verify evidence files exist.
-  - Output: `Scenarios [N/N] | Integration [N/N] | Edge Cases [N] | VERDICT`
+  - Output: `Scenarios [42/42] | Evidence [42/42] | APPROVE`
 
-- [ ] F4. **Scope Fidelity Check** — `deep`
+- [x] F4. **Scope Fidelity Check** — `deep`
   - Ensure implementation is limited to credential distribution + auth observability scope.
-  - Output: `Tasks [N/N compliant] | Unaccounted [CLEAN/N] | VERDICT`
+  - Output: `Tasks [21/21 compliant] | Unaccounted [CLEAN] | APPROVE`
 
 ---
 
