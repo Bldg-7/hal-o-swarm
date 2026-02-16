@@ -76,5 +76,26 @@
       "enabled": true,
       "retention_days": 90
     }
+  },
+  "credentials": {
+    "version": 1,
+    "defaults": {
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-ant-your-default-key",
+        "OPENAI_API_KEY": "sk-your-default-key"
+      }
+    },
+    "agents": {
+      "agent-1": {
+        "env": {
+          "ANTHROPIC_API_KEY": "sk-ant-agent1-specific-key"
+        }
+      },
+      "agent-2": {
+        "env": {
+          "OPENAI_API_KEY": "sk-agent2-specific-key"
+        }
+      }
+    }
   }
 }

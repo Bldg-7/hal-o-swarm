@@ -585,3 +585,154 @@ func TestWSClientEventResendOnReconnect(t *testing.T) {
 		t.Error("resent event not found in messages after reconnect")
 	}
 }
+
+func TestWSClientRoutesCommandEnvelope(t *testing.T) {
+	mock := newMockWSServer(t)
+	defer mock.Close()
+
+	logger := testLogger(t)
+	client := NewWSClient(mock.URL(), "token", logger,
+		WithBackoff(fastTestBackoff()),
+	)
+
+	var handlerCalled atomic.Int32
+	var receivedEnvelope atomic.Value
+	client.RegisterCommandHandler("create_session", func(ctx context.Context, env *shared.Envelope) error {
+		handlerCalled.Add(1)
+		receivedEnvelope.Store(env)
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client.Connect(ctx)
+	defer client.Close()
+
+	var serverConn *websocket.Conn
+	select {
+	case serverConn = <-mock.connCh:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for connection")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	cmdPayload, _ := json.Marshal(map[string]interface{}{
+		"type":       "create_session",
+		"command_id": "cmd-123",
+		"target":     map[string]string{"project": "test-proj"},
+	})
+	cmdEnv := &shared.Envelope{
+		Version:   shared.ProtocolVersion,
+		Type:      string(shared.MessageTypeCommand),
+		RequestID: "req-1",
+		Timestamp: time.Now().Unix(),
+		Payload:   cmdPayload,
+	}
+	data, err := shared.MarshalEnvelope(cmdEnv)
+	if err != nil {
+		t.Fatalf("marshal command envelope: %v", err)
+	}
+	if err := serverConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write command to client: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	if handlerCalled.Load() != 1 {
+		t.Errorf("expected handler called once, got %d", handlerCalled.Load())
+	}
+
+	stored := receivedEnvelope.Load()
+	if stored == nil {
+		t.Fatal("handler did not receive envelope")
+	}
+	env := stored.(*shared.Envelope)
+	if env.RequestID != "req-1" {
+		t.Errorf("expected request_id 'req-1', got %q", env.RequestID)
+	}
+	if env.Type != string(shared.MessageTypeCommand) {
+		t.Errorf("expected type %q, got %q", shared.MessageTypeCommand, env.Type)
+	}
+}
+
+func TestWSClientRejectsUnknownCommand(t *testing.T) {
+	mock := newMockWSServer(t)
+	defer mock.Close()
+
+	logger := testLogger(t)
+	client := NewWSClient(mock.URL(), "token", logger,
+		WithBackoff(fastTestBackoff()),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client.Connect(ctx)
+	defer client.Close()
+
+	var serverConn *websocket.Conn
+	select {
+	case serverConn = <-mock.connCh:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for connection")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	unknownPayload, _ := json.Marshal(map[string]interface{}{
+		"type":       "totally_unknown_command",
+		"command_id": "cmd-999",
+	})
+	unknownEnv := &shared.Envelope{
+		Version:   shared.ProtocolVersion,
+		Type:      string(shared.MessageTypeCommand),
+		Timestamp: time.Now().Unix(),
+		Payload:   unknownPayload,
+	}
+	data, err := shared.MarshalEnvelope(unknownEnv)
+	if err != nil {
+		t.Fatalf("marshal unknown command envelope: %v", err)
+	}
+	if err := serverConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write unknown command to client: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	if !client.IsConnected() {
+		t.Error("client should still be connected after unknown command")
+	}
+
+	// Verify connection still functional: register a handler and send valid command
+	var validCalled atomic.Int32
+	client.RegisterCommandHandler("kill_session", func(ctx context.Context, env *shared.Envelope) error {
+		validCalled.Add(1)
+		return nil
+	})
+
+	validPayload, _ := json.Marshal(map[string]interface{}{
+		"type":       "kill_session",
+		"command_id": "cmd-1000",
+	})
+	validEnv := &shared.Envelope{
+		Version:   shared.ProtocolVersion,
+		Type:      string(shared.MessageTypeCommand),
+		Timestamp: time.Now().Unix(),
+		Payload:   validPayload,
+	}
+	data, err = shared.MarshalEnvelope(validEnv)
+	if err != nil {
+		t.Fatalf("marshal valid command envelope: %v", err)
+	}
+	if err := serverConn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write valid command to client: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	if validCalled.Load() != 1 {
+		t.Errorf("expected valid handler called once after unknown command, got %d", validCalled.Load())
+	}
+}

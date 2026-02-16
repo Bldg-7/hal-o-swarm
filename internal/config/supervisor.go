@@ -6,6 +6,16 @@ import (
 	"os"
 )
 
+type CredentialDefaults struct {
+	Env map[string]string `json:"env"`
+}
+
+type CredentialDistributionConfig struct {
+	Version  int64                         `json:"version"`
+	Defaults CredentialDefaults            `json:"defaults"`
+	Agents   map[string]CredentialDefaults `json:"agents"`
+}
+
 type SupervisorConfig struct {
 	Server struct {
 		Port                  int      `json:"port"`
@@ -36,11 +46,12 @@ type SupervisorConfig struct {
 			WebhookURL string `json:"webhook_url"`
 		} `json:"n8n"`
 	} `json:"channels"`
-	Cost         CostConfig     `json:"cost"`
-	Routes       []interface{}  `json:"routes"`
-	Policies     PolicyConfig   `json:"policies"`
-	Dependencies interface{}    `json:"dependencies"`
-	Security     SecurityConfig `json:"security"`
+	Cost         CostConfig                   `json:"cost"`
+	Routes       []interface{}                `json:"routes"`
+	Policies     PolicyConfig                 `json:"policies"`
+	Dependencies interface{}                  `json:"dependencies"`
+	Security     SecurityConfig               `json:"security"`
+	Credentials  CredentialDistributionConfig `json:"credentials"`
 }
 
 type SecurityConfig struct {
@@ -258,6 +269,10 @@ func validateSupervisorConfig(cfg *SupervisorConfig) error {
 		}
 	}
 
+	if err := validateCredentialDistributionConfig(&cfg.Credentials); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -276,6 +291,36 @@ func validateCostProviderConfig(provider string, cfg CostProviderConfig) error {
 		}
 		if rates.Input < 0 || rates.Output < 0 {
 			return fmt.Errorf("validation error: cost.providers.%s.model_rates.%s rates must be >= 0", provider, model)
+		}
+	}
+
+	return nil
+}
+
+func validateCredentialDistributionConfig(cfg *CredentialDistributionConfig) error {
+	// If credentials section is not provided, it's valid (optional)
+	if cfg == nil {
+		return nil
+	}
+
+	// Validate version is non-negative
+	if cfg.Version < 0 {
+		return fmt.Errorf("validation error: credentials.version must be >= 0, got %d", cfg.Version)
+	}
+
+	// Validate defaults env map
+	for key, value := range cfg.Defaults.Env {
+		if value == "" {
+			return fmt.Errorf("validation error: credentials.defaults.env.%s must not be empty", key)
+		}
+	}
+
+	// Validate per-agent env maps
+	for agentName, creds := range cfg.Agents {
+		for key, value := range creds.Env {
+			if value == "" {
+				return fmt.Errorf("validation error: credentials.agents.%s.env.%s must not be empty", agentName, key)
+			}
 		}
 	}
 

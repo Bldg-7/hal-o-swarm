@@ -3,6 +3,8 @@ package supervisor
 import (
 	"database/sql"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +122,101 @@ func TestRegistryHeartbeatTimeoutMarksOffline(t *testing.T) {
 	}
 	if node.Status != NodeStatusOffline {
 		t.Fatalf("expected offline status, got %s", node.Status)
+	}
+}
+
+func TestRegistryAuthSummary(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	registry := NewNodeRegistry(db, zap.NewNop())
+
+	if err := registry.Register(NodeEntry{ID: "node-3", Hostname: "agent-host-3"}); err != nil {
+		t.Fatalf("register node failed: %v", err)
+	}
+
+	authStates := map[string]NodeAuthState{
+		"github": {
+			Tool:      "github",
+			Status:    "authenticated",
+			Reason:    "",
+			CheckedAt: time.Now().UTC(),
+		},
+		"anthropic": {
+			Tool:      "anthropic",
+			Status:    "unauthenticated",
+			Reason:    "missing API key",
+			CheckedAt: time.Now().UTC(),
+		},
+		"docker": {
+			Tool:      "docker",
+			Status:    "not_installed",
+			Reason:    "docker binary not found",
+			CheckedAt: time.Now().UTC(),
+		},
+	}
+
+	if err := registry.UpdateAuthState("node-3", authStates); err != nil {
+		t.Fatalf("update auth state failed: %v", err)
+	}
+
+	retrieved := registry.GetAuthState("node-3")
+	if len(retrieved) != 3 {
+		t.Fatalf("expected 3 auth states, got %d", len(retrieved))
+	}
+
+	if retrieved["github"].Status != "authenticated" {
+		t.Fatalf("expected github authenticated, got %s", retrieved["github"].Status)
+	}
+	if retrieved["anthropic"].Status != "unauthenticated" {
+		t.Fatalf("expected anthropic unauthenticated, got %s", retrieved["anthropic"].Status)
+	}
+	if retrieved["docker"].Status != "not_installed" {
+		t.Fatalf("expected docker not_installed, got %s", retrieved["docker"].Status)
+	}
+
+	node, err := registry.GetNode("node-3")
+	if err != nil {
+		t.Fatalf("get node failed: %v", err)
+	}
+	if node.AuthStates == nil || len(node.AuthStates) != 3 {
+		t.Fatalf("expected node to have 3 auth states, got %d", len(node.AuthStates))
+	}
+	if node.AuthUpdatedAt.IsZero() {
+		t.Fatalf("expected AuthUpdatedAt to be set")
+	}
+}
+
+func TestRegistryNoSecretStore(t *testing.T) {
+	forbiddenFields := map[string]bool{
+		"key":      true,
+		"token":    true,
+		"secret":   true,
+		"password": true,
+		"apikey":   true,
+		"api_key":  true,
+	}
+
+	authStateType := reflect.TypeOf((*NodeAuthState)(nil)).Elem()
+	for i := 0; i < authStateType.NumField(); i++ {
+		field := authStateType.Field(i)
+		fieldNameLower := strings.ToLower(field.Name)
+		if forbiddenFields[fieldNameLower] {
+			t.Fatalf("NodeAuthState contains forbidden field: %s", field.Name)
+		}
+	}
+
+	nodeEntryType := reflect.TypeOf((*NodeEntry)(nil)).Elem()
+	for i := 0; i < nodeEntryType.NumField(); i++ {
+		field := nodeEntryType.Field(i)
+		if field.Name == "AuthStates" {
+			authStateMapType := field.Type.Elem()
+			for j := 0; j < authStateMapType.NumField(); j++ {
+				subField := authStateMapType.Field(j)
+				subFieldNameLower := strings.ToLower(subField.Name)
+				if forbiddenFields[subFieldNameLower] {
+					t.Fatalf("NodeAuthState (in NodeEntry) contains forbidden field: %s", subField.Name)
+				}
+			}
+		}
 	}
 }
 

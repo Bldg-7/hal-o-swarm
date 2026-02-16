@@ -41,6 +41,9 @@ type SnapshotProvider func() *StateSnapshot
 // MessageHandler processes messages received from the supervisor.
 type MessageHandler func(env *shared.Envelope) error
 
+// CommandHandler processes a specific command type received from the supervisor.
+type CommandHandler func(ctx context.Context, envelope *shared.Envelope) error
+
 // pendingEvent pairs a sequence number with an envelope for resend tracking.
 type pendingEvent struct {
 	seq int64
@@ -61,6 +64,9 @@ type WSClient struct {
 
 	snapshotProvider SnapshotProvider
 	messageHandler   MessageHandler
+
+	commandHandlers map[string]CommandHandler
+	commandMu       sync.RWMutex
 
 	conn   *websocket.Conn
 	connMu sync.Mutex
@@ -99,12 +105,13 @@ func WithBackoff(b *Backoff) WSClientOption {
 // NewWSClient creates a WebSocket client for supervisor communication.
 func NewWSClient(url, authToken string, logger *zap.Logger, opts ...WSClientOption) *WSClient {
 	c := &WSClient{
-		url:       url,
-		authToken: authToken,
-		logger:    logger,
-		backoff:   DefaultBackoff(),
-		done:      make(chan struct{}),
-		nextSeq:   1,
+		url:             url,
+		authToken:       authToken,
+		logger:          logger,
+		backoff:         DefaultBackoff(),
+		commandHandlers: make(map[string]CommandHandler),
+		done:            make(chan struct{}),
+		nextSeq:         1,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -214,6 +221,11 @@ func (c *WSClient) readLoop(ctx context.Context) error {
 		env, err := shared.UnmarshalEnvelope(msg)
 		if err != nil {
 			c.logger.Warn("invalid message from supervisor", zap.Error(err))
+			continue
+		}
+
+		if env.Type == string(shared.MessageTypeCommand) {
+			c.handleCommand(ctx, env)
 			continue
 		}
 
@@ -340,4 +352,44 @@ func (c *WSClient) IsConnected() bool {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 	return c.conn != nil
+}
+
+// RegisterCommandHandler registers a handler for a specific command type.
+func (c *WSClient) RegisterCommandHandler(cmdType string, handler CommandHandler) {
+	c.commandMu.Lock()
+	defer c.commandMu.Unlock()
+	c.commandHandlers[cmdType] = handler
+}
+
+func (c *WSClient) handleCommand(ctx context.Context, env *shared.Envelope) {
+	var cmd struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(env.Payload, &cmd); err != nil {
+		c.logger.Warn("failed to parse command payload",
+			zap.Error(err),
+			zap.String("request_id", env.RequestID),
+		)
+		return
+	}
+
+	c.commandMu.RLock()
+	handler, ok := c.commandHandlers[cmd.Type]
+	c.commandMu.RUnlock()
+
+	if !ok {
+		c.logger.Warn("no handler for command type",
+			zap.String("command_type", cmd.Type),
+			zap.String("request_id", env.RequestID),
+		)
+		return
+	}
+
+	if err := handler(ctx, env); err != nil {
+		c.logger.Error("command handler error",
+			zap.String("command_type", cmd.Type),
+			zap.String("request_id", env.RequestID),
+			zap.Error(err),
+		)
+	}
 }

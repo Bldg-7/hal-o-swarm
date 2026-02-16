@@ -590,3 +590,89 @@ func TestEnvManifestLoadExample(t *testing.T) {
 		t.Error("expected projects to be set")
 	}
 }
+
+func TestSupervisorCredentialConfigValid(t *testing.T) {
+	cfg := &SupervisorConfig{}
+	cfg.Server.Port = 8420
+	cfg.Server.AuthToken = "token"
+	cfg.Server.HeartbeatIntervalSec = 30
+	cfg.Server.HeartbeatTimeoutCount = 3
+	cfg.Credentials.Version = 1
+	cfg.Credentials.Defaults.Env = map[string]string{
+		"ANTHROPIC_API_KEY": "sk-ant-test-key",
+		"OPENAI_API_KEY":    "sk-test-key",
+	}
+	cfg.Credentials.Agents = map[string]CredentialDefaults{
+		"agent-1": {
+			Env: map[string]string{
+				"ANTHROPIC_API_KEY": "sk-ant-agent1-key",
+			},
+		},
+	}
+
+	err := validateSupervisorConfig(cfg)
+	if err != nil {
+		t.Errorf("expected valid credential config, got error: %v", err)
+	}
+}
+
+func TestSupervisorCredentialConfigRejectsEmptySecret(t *testing.T) {
+	cfg := &SupervisorConfig{}
+	cfg.Server.Port = 8420
+	cfg.Server.AuthToken = "token"
+	cfg.Server.HeartbeatIntervalSec = 30
+	cfg.Server.HeartbeatTimeoutCount = 3
+	cfg.Credentials.Version = 1
+	cfg.Credentials.Defaults.Env = map[string]string{
+		"ANTHROPIC_API_KEY": "",
+	}
+
+	err := validateSupervisorConfig(cfg)
+	if err == nil {
+		t.Error("expected error for empty secret in defaults, got nil")
+	}
+	if err.Error() != "validation error: credentials.defaults.env.ANTHROPIC_API_KEY must not be empty" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSupervisorCredentialConfigRejectsEmptySecretInAgent(t *testing.T) {
+	cfg := &SupervisorConfig{}
+	cfg.Server.Port = 8420
+	cfg.Server.AuthToken = "token"
+	cfg.Server.HeartbeatIntervalSec = 30
+	cfg.Server.HeartbeatTimeoutCount = 3
+	cfg.Credentials.Version = 1
+	cfg.Credentials.Agents = map[string]CredentialDefaults{
+		"agent-1": {
+			Env: map[string]string{
+				"OPENAI_API_KEY": "",
+			},
+		},
+	}
+
+	err := validateSupervisorConfig(cfg)
+	if err == nil {
+		t.Error("expected error for empty secret in agent, got nil")
+	}
+	if err.Error() != "validation error: credentials.agents.agent-1.env.OPENAI_API_KEY must not be empty" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSupervisorCredentialConfigRejectsNegativeVersion(t *testing.T) {
+	cfg := &SupervisorConfig{}
+	cfg.Server.Port = 8420
+	cfg.Server.AuthToken = "token"
+	cfg.Server.HeartbeatIntervalSec = 30
+	cfg.Server.HeartbeatTimeoutCount = 3
+	cfg.Credentials.Version = -1
+
+	err := validateSupervisorConfig(cfg)
+	if err == nil {
+		t.Error("expected error for negative version, got nil")
+	}
+	if err.Error() != "validation error: credentials.version must be >= 0, got -1" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

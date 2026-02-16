@@ -736,5 +736,139 @@ func TestSecurityAuditFailedCommand(t *testing.T) {
 	}
 }
 
+func TestSanitizeArgsRecursive(t *testing.T) {
+	args := map[string]interface{}{
+		"project": "my-app",
+		"config": map[string]interface{}{
+			"region":     "us-east-1",
+			"account_id": "12345",
+			"connection": map[string]interface{}{
+				"api_key": "sk-deep-nested-key",
+				"secret":  "deep-secret-value",
+				"host":    "db.example.com",
+			},
+			"auth_token": "level2-token",
+		},
+		"items": []interface{}{
+			"plain-string",
+			map[string]interface{}{
+				"name":     "item1",
+				"password": "item-password-leak",
+			},
+		},
+		"password": "top-level-pw",
+	}
+
+	result := SanitizeArgs(args)
+
+	if strings.Contains(result, "top-level-pw") {
+		t.Error("top-level password should be redacted")
+	}
+	if strings.Contains(result, "level2-token") {
+		t.Error("nested auth_token should be redacted")
+	}
+	if strings.Contains(result, "sk-deep-nested-key") {
+		t.Error("deeply nested api_key should be redacted")
+	}
+	if strings.Contains(result, "deep-secret-value") {
+		t.Error("deeply nested secret should be redacted")
+	}
+	if strings.Contains(result, "item-password-leak") {
+		t.Error("password inside array element should be redacted")
+	}
+
+	if !strings.Contains(result, "my-app") {
+		t.Error("top-level project should be preserved")
+	}
+	if !strings.Contains(result, "us-east-1") {
+		t.Error("nested region should be preserved")
+	}
+	if !strings.Contains(result, "12345") {
+		t.Error("nested account_id should be preserved")
+	}
+	if !strings.Contains(result, "db.example.com") {
+		t.Error("deeply nested non-secret host should be preserved")
+	}
+	if !strings.Contains(result, "plain-string") {
+		t.Error("plain string in array should be preserved")
+	}
+	if !strings.Contains(result, "item1") {
+		t.Error("non-secret key in array map should be preserved")
+	}
+}
+
+func TestAuditNoPlainSecret(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	audit := NewAuditLogger(db, zap.NewNop())
+
+	cmd := Command{
+		CommandID: "cmd-nested-secret",
+		Type:      CommandTypeCreateSession,
+		Target:    CommandTarget{Project: "secure-project"},
+		Args: map[string]interface{}{
+			"prompt": "deploy it",
+			"env": map[string]interface{}{
+				"region":     "eu-west-1",
+				"api_secret": "plaintext-api-secret-DO-NOT-LEAK",
+				"nested": map[string]interface{}{
+					"password":   "deeply-nested-password-DO-NOT-LEAK",
+					"cluster_id": "cluster-42",
+				},
+			},
+			"providers": []interface{}{
+				map[string]interface{}{
+					"name":       "anthropic",
+					"auth_token": "sk-ant-DO-NOT-LEAK",
+				},
+			},
+		},
+	}
+
+	result := &CommandResult{
+		CommandID: "cmd-nested-secret",
+		Status:    CommandStatusSuccess,
+		Timestamp: time.Now().UTC(),
+	}
+
+	audit.LogCommand(cmd, result, "deployer", "10.0.0.5", 200*time.Millisecond)
+
+	entries, err := audit.QueryByActor("deployer", 10)
+	if err != nil {
+		t.Fatalf("QueryByActor: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	storedArgs := entries[0].Args
+
+	leaks := []string{
+		"plaintext-api-secret-DO-NOT-LEAK",
+		"deeply-nested-password-DO-NOT-LEAK",
+		"sk-ant-DO-NOT-LEAK",
+	}
+	for _, leak := range leaks {
+		if strings.Contains(storedArgs, leak) {
+			t.Errorf("audit DB contains plaintext secret %q", leak)
+		}
+	}
+
+	if !strings.Contains(storedArgs, "deploy it") {
+		t.Error("prompt should be preserved in audit")
+	}
+	if !strings.Contains(storedArgs, "eu-west-1") {
+		t.Error("region should be preserved in audit")
+	}
+	if !strings.Contains(storedArgs, "cluster-42") {
+		t.Error("cluster_id should be preserved in audit")
+	}
+	if !strings.Contains(storedArgs, "anthropic") {
+		t.Error("provider name should be preserved in audit")
+	}
+	if !strings.Contains(storedArgs, "[REDACTED]") {
+		t.Error("should contain [REDACTED] markers")
+	}
+}
+
 // Suppress unused import warning — needed for sqlite driver registration.
 var _ = storage.NewMigrationRunner

@@ -84,18 +84,38 @@ func SanitizeArgs(args map[string]interface{}) string {
 		return "{}"
 	}
 
-	sanitized := make(map[string]interface{}, len(args))
-	for k, v := range args {
-		if IsSecretKey(k) {
-			sanitized[k] = "[REDACTED]"
-		} else {
-			sanitized[k] = v
-		}
-	}
+	sanitized := sanitizeMap(args)
 
 	data, err := json.Marshal(sanitized)
 	if err != nil {
 		return "{}"
 	}
 	return string(data)
+}
+
+func sanitizeMap(m map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		if IsSecretKey(k) {
+			out[k] = "[REDACTED]"
+		} else {
+			out[k] = sanitizeValue(v)
+		}
+	}
+	return out
+}
+
+func sanitizeValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		return sanitizeMap(val)
+	case []interface{}:
+		out := make([]interface{}, len(val))
+		for i, elem := range val {
+			out[i] = sanitizeValue(elem)
+		}
+		return out
+	default:
+		return v
+	}
 }

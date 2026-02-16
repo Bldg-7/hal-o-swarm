@@ -54,11 +54,11 @@ Deliver a dependable multi-node supervisor-agent system that can observe, contro
 - Config + manifest templates: `supervisor.config.json`, `agent.config.json`, `env-manifest.json`.
 
 ### Definition of Done
-- [ ] 2+ agents connect concurrently and remain healthy for 30+ minutes.
-- [ ] `/status`, `/resume`, `/inject`, `/restart`, `/kill`, `/start`, `/cost`, `/nodes` function end-to-end via Discord.
-- [ ] Environment check/provision endpoints and halctl commands return deterministic structured output.
-- [ ] Cost report (today/week/month) returns non-empty aggregated payload from at least Anthropic + OpenAI sources.
-- [ ] Failure scenarios (node offline, SSE drop, command timeout, heartbeat miss) are detected and surfaced.
+- [x] 2+ agents connect concurrently and remain healthy for 30+ minutes.
+- [x] `/status`, `/resume`, `/inject`, `/restart`, `/kill`, `/start`, `/cost`, `/nodes` function end-to-end via Discord.
+- [x] Environment check/provision endpoints and halctl commands return deterministic structured output.
+- [x] Cost report (today/week/month) returns non-empty aggregated payload from at least Anthropic + OpenAI sources.
+- [x] Failure scenarios (node offline, SSE drop, command timeout, heartbeat miss) are detected and surfaced.
 
 ### Must Have
 - Protocol-versioned WebSocket envelope for all agent-supervisor messages.
@@ -201,7 +201,7 @@ Max Concurrent: 5
 
 > Implementation + verification are one task. Each task includes two executable QA scenarios.
 
-- [ ] 1. Repository scaffolding and base config
+- [x] 1. Repository scaffolding and base config
   - **What to do**: initialize module layout per `Hal-o-swarm_Product_Spec_v1.1.md:735`; add config examples and strict validation defaults.
   - **Must NOT do**: add Slack-specific runtime wiring.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master` (atomic setup commits).
@@ -211,7 +211,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Tool Bash; `go test ./internal/config -run TestLoadExample`; expect PASS; evidence `.sisyphus/evidence/task-1-config-pass.txt`.
   - **QA Scenario (error)**: Tool Bash; load malformed config fixture; expect explicit validation error field path; evidence `.sisyphus/evidence/task-1-config-fail.txt`.
 
-- [ ] 2. Shared protocol/types v1 envelope
+- [x] 2. Shared protocol/types v1 envelope
   - **What to do**: define protocol envelope with `version,type,request_id,timestamp,payload`; implement marshal/unmarshal validation.
   - **Must NOT do**: unversioned message handlers.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -221,7 +221,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash `go test ./internal/shared -run TestEnvelopeRoundTrip`; PASS; evidence `.sisyphus/evidence/task-2-envelope-pass.txt`.
   - **QA Scenario (error)**: Bash invalid version payload test returns `ErrUnsupportedVersion`; evidence `.sisyphus/evidence/task-2-envelope-fail.txt`.
 
-- [ ] 3. SQLite schema and migration bootstrap
+- [x] 3. SQLite schema and migration bootstrap
   - **What to do**: create migration runner and initial schema for events, sessions, costs, command idempotency.
   - **Must NOT do**: production retention deletions without config gate.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -231,7 +231,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash `go test ./internal/storage -run TestMigrateFresh`; PASS; evidence `.sisyphus/evidence/task-3-migrate-pass.txt`.
   - **QA Scenario (error)**: Bash simulate broken migration checksum; expect fail-fast; evidence `.sisyphus/evidence/task-3-migrate-fail.txt`.
 
-- [ ] 4. Supervisor runtime bootstrap
+- [x] 4. Supervisor runtime bootstrap
   - **What to do**: initialize supervisor main lifecycle, graceful shutdown hooks, config + logger wiring.
   - **Must NOT do**: bind chat integrations before command contracts are ready.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -241,7 +241,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash run supervisor for 5s then SIGTERM; expect graceful stop log; evidence `.sisyphus/evidence/task-4-supervisor-pass.txt`.
   - **QA Scenario (error)**: Bash start with missing token; expect startup rejection; evidence `.sisyphus/evidence/task-4-supervisor-fail.txt`.
 
-- [ ] 5. Agent runtime bootstrap
+- [x] 5. Agent runtime bootstrap
   - **What to do**: initialize agent config loading, project registry, local opencode process supervisor skeleton.
   - **Must NOT do**: assume one opencode serve handles all projects.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -251,7 +251,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash `go test ./internal/agent -run TestLoadProjects`; PASS; evidence `.sisyphus/evidence/task-5-agent-pass.txt`.
   - **QA Scenario (error)**: Bash fixture with nonexistent project directory fails with clear message; evidence `.sisyphus/evidence/task-5-agent-fail.txt`.
 
-- [ ] 6. Supervisor WebSocket hub with handshake auth and heartbeat
+- [x] 6. Supervisor WebSocket hub with handshake auth and heartbeat
   - **What to do**: implement authenticated upgrade, origin checks, ping/pong deadlines, heartbeat timeout marking offline.
   - **Must NOT do**: accept unauthenticated upgrades.
   - **Recommended Agent Profile**: Category `unspecified-high`, Skills `git-master`.
@@ -261,7 +261,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash integration test connects mock agent with valid token and heartbeat; expect `online`; evidence `.sisyphus/evidence/task-6-ws-pass.txt`.
   - **QA Scenario (error)**: Bash invalid token connect attempt returns 401/close; evidence `.sisyphus/evidence/task-6-ws-fail.txt`.
 
-- [ ] 7. Agent WebSocket client reconnect/backoff/resync
+- [x] 7. Agent WebSocket client reconnect/backoff/resync
   - **What to do**: implement jittered exponential backoff reconnect, sequence-aware event resend, full snapshot on reconnect.
   - **Must NOT do**: tight reconnect loops without jitter.
   - **Recommended Agent Profile**: Category `unspecified-high`, Skills `git-master`.
@@ -271,7 +271,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash kill/restart supervisor in test; agent reconnects and reports snapshot; evidence `.sisyphus/evidence/task-7-reconnect-pass.txt`.
   - **QA Scenario (error)**: Bash unreachable supervisor for 3 retries logs capped backoff and no crash; evidence `.sisyphus/evidence/task-7-reconnect-fail.txt`.
 
-- [ ] 8. Node registry + session tracker persistence
+- [x] 8. Node registry + session tracker persistence
   - **What to do**: implement registry/tracker stores, status transitions, DB persistence and recovery.
   - **Must NOT do**: in-memory-only state for authoritative session map.
   - **Recommended Agent Profile**: Category `deep`, Skills `git-master`.
@@ -281,7 +281,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash integration test persists node/session then restarts service and reloads state; evidence `.sisyphus/evidence/task-8-tracker-pass.txt`.
   - **QA Scenario (error)**: Bash corrupted row fixture triggers guarded recovery path with error metric increment; evidence `.sisyphus/evidence/task-8-tracker-fail.txt`.
 
-- [ ] 9. Event ingestion ordering and dedup pipeline
+- [x] 9. Event ingestion ordering and dedup pipeline
   - **What to do**: add per-agent sequence tracking, dedup cache by event id, gap detection and replay request path.
   - **Must NOT do**: unordered blind append.
   - **Recommended Agent Profile**: Category `deep`, Skills `git-master`.
@@ -291,7 +291,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash feed ordered events 1..N; expect all processed once; evidence `.sisyphus/evidence/task-9-events-pass.txt`.
   - **QA Scenario (error)**: Bash send duplicate + missing seq; expect dedup and gap warning; evidence `.sisyphus/evidence/task-9-events-fail.txt`.
 
-- [ ] 10. opencode SDK adapter and SSE demultiplexer
+- [x] 10. opencode SDK adapter and SSE demultiplexer
   - **What to do**: implement adapter around `opencode-sdk-go`; map spec operations to real SDK (`Prompt`, `Abort/Delete`, `ListStreaming`) and mockable interface.
   - **Must NOT do**: direct SDK calls outside adapter package.
   - **Recommended Agent Profile**: Category `deep`, Skills `git-master`.
@@ -301,7 +301,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash `go test ./internal/agent -run TestOpencodeAdapter`; PASS; evidence `.sisyphus/evidence/task-10-adapter-pass.txt`.
   - **QA Scenario (error)**: Bash simulate SSE disconnect and adapter returns recoverable error class; evidence `.sisyphus/evidence/task-10-adapter-fail.txt`.
 
-- [ ] 11. Command dispatcher with idempotency and command result contracts
+- [x] 11. Command dispatcher with idempotency and command result contracts
   - **What to do**: parse command intents, assign/validate `command_id`, enforce idempotency key TTL, dispatch to node/agent.
   - **Must NOT do**: fire-and-forget commands without completion status.
   - **Recommended Agent Profile**: Category `deep`, Skills `git-master`.
@@ -311,7 +311,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash send same command with same idempotency key twice; second is cached response; evidence `.sisyphus/evidence/task-11-command-pass.txt`.
   - **QA Scenario (error)**: Bash command to offline node returns deterministic failure payload; evidence `.sisyphus/evidence/task-11-command-fail.txt`.
 
-- [ ] 12. Discord slash command integration
+- [x] 12. Discord slash command integration
   - **What to do**: implement command handlers for `/status /nodes /logs /resume /inject /restart /kill /start /cost` with embeds.
   - **Must NOT do**: interactive button workflow in v1.0.
   - **Recommended Agent Profile**: Category `unspecified-high`, Skills `git-master`.
@@ -321,7 +321,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash run mocked Discord interaction tests for all commands; evidence `.sisyphus/evidence/task-12-discord-pass.txt`.
   - **QA Scenario (error)**: Bash invalid project in `/resume` returns user-safe error embed; evidence `.sisyphus/evidence/task-12-discord-fail.txt`.
 
-- [ ] 13. Supervisor HTTP API (sessions/nodes/events)
+- [x] 13. Supervisor HTTP API (sessions/nodes/events)
   - **What to do**: implement REST endpoints for status/control surface and event log retrieval.
   - **Must NOT do**: undocumented write endpoints that bypass command handler.
   - **Recommended Agent Profile**: Category `unspecified-high`, Skills `git-master`.
@@ -331,7 +331,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash `curl` smoke for `/api/v1/sessions` and `/api/v1/nodes` fields; evidence `.sisyphus/evidence/task-13-api-pass.json`.
   - **QA Scenario (error)**: Bash unauthorized request returns 401; evidence `.sisyphus/evidence/task-13-api-fail.json`.
 
-- [ ] 14. Auto-intervention policy engine
+- [x] 14. Auto-intervention policy engine
   - **What to do**: implement config-driven resume-on-idle, restart-on-compaction, kill-on-cost switches with retry ceilings.
   - **Must NOT do**: intervention loops without retry cap.
   - **Recommended Agent Profile**: Category `deep`, Skills `git-master`.
@@ -341,7 +341,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash simulate idle > threshold and observe resume action count increment; evidence `.sisyphus/evidence/task-14-policy-pass.txt`.
   - **QA Scenario (error)**: Bash force repeated resume failure and verify capped retries + alert event; evidence `.sisyphus/evidence/task-14-policy-fail.txt`.
 
-- [ ] 15. Dependency graph validator and manual trigger
+- [x] 15. Dependency graph validator and manual trigger
   - **What to do**: implement DAG parser/validator and manual dependent-start command/API.
   - **Must NOT do**: automatic milestone-based triggers in v1.0.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -351,7 +351,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash valid graph load and manual trigger returns queued downstream; evidence `.sisyphus/evidence/task-15-dep-pass.txt`.
   - **QA Scenario (error)**: Bash cycle fixture fails validation with cycle path; evidence `.sisyphus/evidence/task-15-dep-fail.txt`.
 
-- [ ] 16. Env manifest parser and validator
+- [x] 16. Env manifest parser and validator
   - **What to do**: parse `env-manifest.json`, validate schema and project entries.
   - **Must NOT do**: silently ignore unknown required fields.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -361,7 +361,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash `go test ./internal/shared -run TestManifestValid`; PASS; evidence `.sisyphus/evidence/task-16-manifest-pass.txt`.
   - **QA Scenario (error)**: Bash invalid runtime version token fails parse; evidence `.sisyphus/evidence/task-16-manifest-fail.txt`.
 
-- [ ] 17. Environment checker implementation
+- [x] 17. Environment checker implementation
   - **What to do**: implement runtime/tool/env_var/agent_config/context/git/docs checks and drift result payloads.
   - **Must NOT do**: mutate environment in check-only mode.
   - **Recommended Agent Profile**: Category `unspecified-high`, Skills `git-master`.
@@ -371,7 +371,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash fixture env with all requirements present returns `ready`; evidence `.sisyphus/evidence/task-17-envcheck-pass.json`.
   - **QA Scenario (error)**: Bash missing required docs/env var returns `degraded|missing` with drift items; evidence `.sisyphus/evidence/task-17-envcheck-fail.json`.
 
-- [ ] 18. Safe auto-provisioner + approval-required flow
+- [x] 18. Safe auto-provisioner + approval-required flow
   - **What to do**: implement auto-fix for safe items (AGENT.md/context/docs/hooks/env injection) and manual-required event generation for risky fixes.
   - **Must NOT do**: auto-install packages/SDK without approval token.
   - **Recommended Agent Profile**: Category `unspecified-high`, Skills `git-master`.
@@ -381,7 +381,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash provision on fixture with missing AGENT.md/context creates files; evidence `.sisyphus/evidence/task-18-provision-pass.txt`.
   - **QA Scenario (error)**: Bash fixture missing Java triggers `manual_required` only, no install action; evidence `.sisyphus/evidence/task-18-provision-fail.txt`.
 
-- [ ] 19. Cost aggregator (Anthropic/OpenAI) and estimator
+- [x] 19. Cost aggregator (Anthropic/OpenAI) and estimator
   - **What to do**: implement periodic polling with retry/backoff, store daily buckets, per-model/provider/project reports, and session estimate fallback.
   - **Must NOT do**: block scheduler loop on one provider failure.
   - **Recommended Agent Profile**: Category `deep`, Skills `git-master`.
@@ -391,7 +391,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash mock provider endpoints + poll cycle -> rows inserted and report endpoint non-empty; evidence `.sisyphus/evidence/task-19-cost-pass.json`.
   - **QA Scenario (error)**: Bash one provider returns 429/500 and aggregator continues with degraded marker; evidence `.sisyphus/evidence/task-19-cost-fail.json`.
 
-- [ ] 20. halctl remote-mode command suite
+- [x] 20. halctl remote-mode command suite
   - **What to do**: implement `halctl` commands mapped to supervisor APIs for sessions, nodes, cost, env, and agent-md diff/sync.
   - **Must NOT do**: local-mode direct agent invocation in v1.0.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -401,7 +401,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash run `halctl status`, `halctl nodes`, `halctl env status` against test supervisor; evidence `.sisyphus/evidence/task-20-halctl-pass.txt`.
   - **QA Scenario (error)**: Bash invalid node/project args return non-zero with helpful message; evidence `.sisyphus/evidence/task-20-halctl-fail.txt`.
 
-- [ ] 21. Security hardening
+- [x] 21. Security hardening
   - **What to do**: add TLS support path for WSS, strict origin/auth validation, token rotation hooks, and command audit log table.
   - **Must NOT do**: plaintext secret logging.
   - **Recommended Agent Profile**: Category `unspecified-high`, Skills `git-master`.
@@ -411,7 +411,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash valid origin/token handshake and audited command entry created; evidence `.sisyphus/evidence/task-21-security-pass.txt`.
   - **QA Scenario (error)**: Bash forged origin/token denied with no state mutation; evidence `.sisyphus/evidence/task-21-security-fail.txt`.
 
-- [ ] 22. Observability package
+- [x] 22. Observability package
   - **What to do**: structured logs, Prometheus metrics, readiness/liveness endpoints, basic traces/correlation IDs.
   - **Must NOT do**: silent failures without counter/log context.
   - **Recommended Agent Profile**: Category `quick`, Skills `git-master`.
@@ -421,7 +421,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash scrape `/metrics` and `/healthz`; required metrics present; evidence `.sisyphus/evidence/task-22-observe-pass.txt`.
   - **QA Scenario (error)**: Bash force downstream failure and health endpoint degrades appropriately; evidence `.sisyphus/evidence/task-22-observe-fail.txt`.
 
-- [ ] 23. End-to-end and chaos integration test suite
+- [x] 23. End-to-end and chaos integration test suite
   - **What to do**: implement full lifecycle integration tests across supervisor+agent+mock opencode and failure cases.
   - **Must NOT do**: mark done on unit-only coverage.
   - **Recommended Agent Profile**: Category `deep`, Skills `git-master`.
@@ -431,7 +431,7 @@ Max Concurrent: 5
   - **QA Scenario (happy)**: Bash `go test ./integration -run TestMultiNodeLifecycle`; PASS; evidence `.sisyphus/evidence/task-23-e2e-pass.txt`.
   - **QA Scenario (error)**: Bash `TestNetworkPartitionRecovery` demonstrates expected unreachable->online transition; evidence `.sisyphus/evidence/task-23-e2e-failcase.txt`.
 
-- [ ] 24. Packaging, systemd, install script, runbook
+- [x] 24. Packaging, systemd, install script, runbook
   - **What to do**: provide systemd units, install script, deployment docs, rollback and incident runbook.
   - **Must NOT do**: deployment docs requiring undocumented manual steps.
   - **Recommended Agent Profile**: Category `writing`, Skills `git-master`.
@@ -445,19 +445,19 @@ Max Concurrent: 5
 
 ## Final Verification Wave (MANDATORY)
 
-- [ ] F1. **Plan Compliance Audit** — `oracle`
+- [x] F1. **Plan Compliance Audit** — `oracle`
   - Verify each Must Have/Must NOT Have against implementation and evidence files.
   - Output: `Must Have [N/N] | Must NOT Have [N/N] | Tasks [N/N] | VERDICT`.
 
-- [ ] F2. **Code Quality Review** — `unspecified-high`
+- [x] F2. **Code Quality Review** — `unspecified-high`
   - Run build/lint/tests and inspect for unsafe casts, dead code, silent catches, and slop patterns.
   - Output: `Build [PASS/FAIL] | Lint [PASS/FAIL] | Tests [N/N] | VERDICT`.
 
-- [ ] F3. **Real QA Scenario Execution** — `unspecified-high`
+- [x] F3. **Real QA Scenario Execution** — `unspecified-high`
   - Execute all task QA scenarios and verify evidence completeness under `.sisyphus/evidence/final-qa/`.
   - Output: `Scenarios [N/N] | Integration [N/N] | Edge Cases [N] | VERDICT`.
 
-- [ ] F4. **Scope Fidelity Check** — `deep`
+- [x] F4. **Scope Fidelity Check** — `deep`
   - Ensure all implemented changes map 1:1 to task scope; flag any scope creep.
   - Output: `Tasks [N/N compliant] | Unaccounted [CLEAN/N] | VERDICT`.
 
@@ -490,8 +490,8 @@ halctl env status
 ```
 
 ### Final Checklist
-- [ ] All Must Have items implemented and verified.
-- [ ] All Must NOT Have constraints remain absent.
-- [ ] All QA scenarios executed with evidence files.
-- [ ] Final review wave (F1-F4) all APPROVE.
-- [ ] Release package installs and registers a node on a clean host.
+- [x] All Must Have items implemented and verified.
+- [x] All Must NOT Have constraints remain absent.
+- [x] All QA scenarios executed with evidence files.
+- [x] Final review wave (F1-F4) all APPROVE.
+- [x] Release package installs and registers a node on a clean host.

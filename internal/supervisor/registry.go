@@ -19,6 +19,15 @@ const (
 	NodeStatusDegraded NodeStatus = "degraded"
 )
 
+// NodeAuthState represents the authentication status for a tool on a node.
+// Contains no secret values - only status and metadata.
+type NodeAuthState struct {
+	Tool      string    `json:"tool"`
+	Status    string    `json:"status"` // authenticated|unauthenticated|not_installed|error|manual_required
+	Reason    string    `json:"reason,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
+}
+
 type NodeEntry struct {
 	ID            string
 	Hostname      string
@@ -28,6 +37,8 @@ type NodeEntry struct {
 	Status        NodeStatus
 	LastHeartbeat time.Time
 	ConnectedAt   time.Time
+	AuthStates    map[string]NodeAuthState `json:"auth_states,omitempty"`
+	AuthUpdatedAt time.Time                `json:"auth_updated_at,omitempty"`
 }
 
 var ErrNodeNotFound = errors.New("node not found")
@@ -148,6 +159,52 @@ func (r *NodeRegistry) ListNodes() []NodeEntry {
 		out = append(out, node)
 	}
 	return out
+}
+
+func (r *NodeRegistry) UpdateAuthState(nodeID string, states map[string]NodeAuthState) error {
+	r.mu.Lock()
+	node, ok := r.nodes[nodeID]
+	r.mu.Unlock()
+
+	if !ok {
+		fromDB, err := r.readNode(nodeID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNodeNotFound
+			}
+			return fmt.Errorf("update auth state %s: %w", nodeID, err)
+		}
+		node = fromDB
+	}
+
+	node.AuthStates = states
+	node.AuthUpdatedAt = time.Now().UTC()
+
+	r.mu.Lock()
+	r.nodes[nodeID] = node
+	r.mu.Unlock()
+
+	return nil
+}
+
+func (r *NodeRegistry) GetAuthState(nodeID string) map[string]NodeAuthState {
+	r.mu.RLock()
+	node, ok := r.nodes[nodeID]
+	r.mu.RUnlock()
+
+	if ok && node.AuthStates != nil {
+		return node.AuthStates
+	}
+
+	fromDB, err := r.readNode(nodeID)
+	if err == nil && fromDB.AuthStates != nil {
+		r.mu.Lock()
+		r.nodes[nodeID] = fromDB
+		r.mu.Unlock()
+		return fromDB.AuthStates
+	}
+
+	return make(map[string]NodeAuthState)
 }
 
 func (r *NodeRegistry) LoadNodesFromDB() error {
