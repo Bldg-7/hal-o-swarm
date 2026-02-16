@@ -10,17 +10,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 type HTTPAPI struct {
-	registry   *NodeRegistry
-	tracker    *SessionTracker
-	dispatcher *CommandDispatcher
-	costs      *CostAggregator
-	db         *sql.DB
-	authToken  string
-	logger     *zap.Logger
+	registry      *NodeRegistry
+	tracker       *SessionTracker
+	dispatcher    *CommandDispatcher
+	costs         *CostAggregator
+	db            *sql.DB
+	authToken     string
+	logger        *zap.Logger
+	healthChecker *HealthChecker
+	metrics       *Metrics
 }
 
 func NewHTTPAPI(
@@ -41,6 +45,7 @@ func NewHTTPAPI(
 		db:         db,
 		authToken:  authToken,
 		logger:     logger,
+		metrics:    GetMetrics(),
 	}
 }
 
@@ -48,6 +53,9 @@ func (a *HTTPAPI) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/v1/health", a.handleHealth)
+	mux.HandleFunc("GET /healthz", a.handleLiveness)
+	mux.HandleFunc("GET /readyz", a.handleReadiness)
+	mux.Handle("GET /metrics", promhttp.Handler())
 
 	mux.Handle("GET /api/v1/sessions", a.requireAuth(http.HandlerFunc(a.handleListSessions)))
 	mux.Handle("GET /api/v1/sessions/{id}", a.requireAuth(http.HandlerFunc(a.handleGetSession)))
@@ -62,6 +70,10 @@ func (a *HTTPAPI) Handler() http.Handler {
 
 func (a *HTTPAPI) SetCostAggregator(aggregator *CostAggregator) {
 	a.costs = aggregator
+}
+
+func (a *HTTPAPI) SetHealthChecker(hc *HealthChecker) {
+	a.healthChecker = hc
 }
 
 type apiResponse struct {
@@ -100,6 +112,40 @@ type healthResponse struct {
 	Status     string            `json:"status"`
 	Components map[string]string `json:"components"`
 	Timestamp  time.Time         `json:"timestamp"`
+}
+
+func (a *HTTPAPI) handleLiveness(w http.ResponseWriter, r *http.Request) {
+	if a.healthChecker == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "alive"})
+		return
+	}
+
+	result := a.healthChecker.CheckLiveness(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	if result.Status == HealthHealthy {
+		w.WriteHeader(http.StatusOK)
+	} else {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+func (a *HTTPAPI) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if a.healthChecker == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		return
+	}
+
+	result := a.healthChecker.CheckReadiness(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	statusCode := http.StatusOK
+	if result.Status == HealthDegraded {
+		statusCode = http.StatusServiceUnavailable
+	} else if result.Status == HealthUnhealthy {
+		statusCode = http.StatusServiceUnavailable
+	}
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(result)
 }
 
 func (a *HTTPAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -375,6 +421,9 @@ func (a *HTTPAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	correlationID := shared.GetCorrelationID(r.Context())
+	ctx := shared.WithCorrelationID(r.Context(), correlationID)
+
 	timeout := time.Duration(req.Timeout) * time.Second
 	cmd := Command{
 		Type:           CommandType(req.Type),
@@ -384,14 +433,26 @@ func (a *HTTPAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
 		Timeout:        timeout,
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), cmd.EffectiveTimeout()+5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, cmd.EffectiveTimeout()+5*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	result, err := a.dispatcher.DispatchCommand(ctx, cmd)
+	duration := time.Since(start).Seconds()
+
 	if err != nil {
-		a.logger.Error("dispatch command failed", zap.Error(err))
+		shared.LogErrorWithContext(ctx, a.logger, "dispatch command failed", err)
+		if a.metrics != nil {
+			a.metrics.RecordCommand(req.Type, "error")
+			a.metrics.RecordError("dispatcher", "dispatch_failed")
+		}
 		writeError(w, http.StatusInternalServerError, "command dispatch failed", "DISPATCH_ERROR")
 		return
+	}
+
+	if a.metrics != nil {
+		a.metrics.RecordCommand(req.Type, string(result.Status))
+		a.metrics.RecordCommandDuration(req.Type, duration)
 	}
 
 	writeJSON(w, http.StatusOK, apiResponse{

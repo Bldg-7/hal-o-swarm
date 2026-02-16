@@ -36,10 +36,34 @@ type SupervisorConfig struct {
 			WebhookURL string `json:"webhook_url"`
 		} `json:"n8n"`
 	} `json:"channels"`
-	Cost         CostConfig    `json:"cost"`
-	Routes       []interface{} `json:"routes"`
-	Policies     PolicyConfig  `json:"policies"`
-	Dependencies interface{}   `json:"dependencies"`
+	Cost         CostConfig     `json:"cost"`
+	Routes       []interface{}  `json:"routes"`
+	Policies     PolicyConfig   `json:"policies"`
+	Dependencies interface{}    `json:"dependencies"`
+	Security     SecurityConfig `json:"security"`
+}
+
+type SecurityConfig struct {
+	TLS             TLSConfig           `json:"tls"`
+	OriginAllowlist []string            `json:"origin_allowlist"`
+	TokenRotation   TokenRotationConfig `json:"token_rotation"`
+	Audit           AuditConfig         `json:"audit"`
+}
+
+type TLSConfig struct {
+	Enabled  bool   `json:"enabled"`
+	CertPath string `json:"cert_path"`
+	KeyPath  string `json:"key_path"`
+}
+
+type TokenRotationConfig struct {
+	Enabled              bool `json:"enabled"`
+	CheckIntervalSeconds int  `json:"check_interval_seconds"`
+}
+
+type AuditConfig struct {
+	Enabled       bool `json:"enabled"`
+	RetentionDays int  `json:"retention_days"`
 }
 
 type CostConfig struct {
@@ -129,6 +153,9 @@ const (
 	defaultCostRequestTimeoutSec    = 15
 	defaultCostMaxRetries           = 3
 	defaultCostBackoffBaseMS        = 500
+
+	defaultTokenRotationCheckIntervalSec = 300
+	defaultAuditRetentionDays            = 90
 )
 
 func LoadSupervisorConfig(path string) (*SupervisorConfig, error) {
@@ -220,6 +247,17 @@ func validateSupervisorConfig(cfg *SupervisorConfig) error {
 		return fmt.Errorf("validation error: policies.kill_on_cost.retry_reset_seconds must be positive, got %d", cfg.Policies.KillOnCost.RetryResetSeconds)
 	}
 
+	cfg.applySecurityDefaults()
+
+	if cfg.Security.TLS.Enabled {
+		if cfg.Security.TLS.CertPath == "" {
+			return fmt.Errorf("validation error: security.tls.cert_path is required when TLS is enabled")
+		}
+		if cfg.Security.TLS.KeyPath == "" {
+			return fmt.Errorf("validation error: security.tls.key_path is required when TLS is enabled")
+		}
+	}
+
 	return nil
 }
 
@@ -277,5 +315,14 @@ func (cfg *SupervisorConfig) applyPolicyDefaults() {
 	}
 	if cfg.Policies.KillOnCost.RetryResetSeconds <= 0 {
 		cfg.Policies.KillOnCost.RetryResetSeconds = defaultKillRetryResetSec
+	}
+}
+
+func (cfg *SupervisorConfig) applySecurityDefaults() {
+	if cfg.Security.TokenRotation.CheckIntervalSeconds <= 0 {
+		cfg.Security.TokenRotation.CheckIntervalSeconds = defaultTokenRotationCheckIntervalSec
+	}
+	if cfg.Security.Audit.RetentionDays <= 0 {
+		cfg.Security.Audit.RetentionDays = defaultAuditRetentionDays
 	}
 }

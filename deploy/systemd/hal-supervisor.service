@@ -1,0 +1,49 @@
+[Unit]
+Description=HAL-O-SWARM Supervisor - Distributed LLM Agent Control Plane
+Documentation=https://github.com/code-yeongyu/hal-o-swarm/blob/main/docs/DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=hal-supervisor
+Group=hal-supervisor
+WorkingDirectory=/opt/hal-o-swarm
+
+# Environment and configuration
+EnvironmentFile=/etc/hal-o-swarm/supervisor.env
+ExecStart=/usr/local/bin/hal-supervisor \
+  --config /etc/hal-o-swarm/supervisor.config.json \
+  --db /var/lib/hal-o-swarm/supervisor.db
+
+# Process management
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hal-o-swarm /var/log/hal-o-swarm
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryLimit=2G
+CPUQuota=80%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hal-supervisor
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

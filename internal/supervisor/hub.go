@@ -28,6 +28,7 @@ type Hub struct {
 
 	authToken      string
 	allowedOrigins []string
+	strictOrigin   bool
 
 	heartbeatInterval time.Duration
 	heartbeatTimeout  int
@@ -128,7 +129,11 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		token = r.URL.Query().Get("token")
 	}
 
-	if token != h.authToken {
+	h.mu.RLock()
+	currentToken := h.authToken
+	h.mu.RUnlock()
+
+	if token != currentToken {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -157,6 +162,10 @@ func (h *Hub) ClientCount() int {
 }
 
 func (h *Hub) checkOrigin(r *http.Request) bool {
+	if h.strictOrigin {
+		return h.checkOriginStrict(r)
+	}
+
 	if len(h.allowedOrigins) == 0 {
 		return true
 	}
@@ -170,6 +179,42 @@ func (h *Hub) checkOrigin(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+func (h *Hub) checkOriginStrict(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		h.logger.Warn("rejected connection with missing origin")
+		return false
+	}
+
+	for _, allowed := range h.allowedOrigins {
+		if MatchOrigin(origin, allowed) {
+			return true
+		}
+	}
+
+	h.logger.Warn("rejected connection from unauthorized origin",
+		zap.String("origin", origin))
+	return false
+}
+
+func (h *Hub) UpdateAuthToken(newToken string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.authToken = newToken
+}
+
+func (h *Hub) SetStrictOrigin(strict bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.strictOrigin = strict
+}
+
+func (h *Hub) SetAllowedOrigins(origins []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.allowedOrigins = origins
 }
 
 func (h *Hub) checkHeartbeats() {

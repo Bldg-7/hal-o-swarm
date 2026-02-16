@@ -32,6 +32,9 @@ func TestMigrateFresh(t *testing.T) {
 	if !tableExists(t, db, "command_idempotency") {
 		t.Error("command_idempotency table not created")
 	}
+	if !tableExists(t, db, "audit_log") {
+		t.Error("audit_log table not created")
+	}
 	if !tableExists(t, db, "schema_migrations") {
 		t.Error("schema_migrations table not created")
 	}
@@ -57,8 +60,8 @@ func TestMigrateIdempotent(t *testing.T) {
 		t.Fatalf("failed to query migrations: %v", err)
 	}
 
-	if count != 1 {
-		t.Errorf("expected 1 migration record, got %d", count)
+	if count != 2 {
+		t.Errorf("expected 2 migration records, got %d", count)
 	}
 }
 

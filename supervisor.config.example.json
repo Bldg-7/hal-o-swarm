@@ -60,5 +60,21 @@
     },
     "check_interval_seconds": 30
   },
-  "dependencies": {}
+  "dependencies": {},
+  "security": {
+    "tls": {
+      "enabled": false,
+      "cert_path": "/path/to/cert.pem",
+      "key_path": "/path/to/key.pem"
+    },
+    "origin_allowlist": [],
+    "token_rotation": {
+      "enabled": false,
+      "check_interval_seconds": 300
+    },
+    "audit": {
+      "enabled": true,
+      "retention_days": 90
+    }
+  }
 }

@@ -590,3 +590,299 @@ All errors printed to stderr, exit code 1.
 - `TestCheckVersionConstraint`: 9 constraint/version combinations
 - `TestNormalizeVersion`: 1-part, 2-part, 3-part, v-prefix
 - `TestDetermineStatus`: empty, all-pass, warn-only, fail-present, mixed
+
+## T23: End-to-End + Chaos Integration Suite
+
+### Integration Harness Pattern
+- Build a dedicated `integration/` package that composes real supervisor internals (`NodeRegistry`, `SessionTracker`, `CommandDispatcher`, `EventPipeline`) with an in-process WebSocket test server.
+- Keep the agent side deterministic by pairing `agent.WSClient` with `agent.MockOpencodeAdapter`; this exercises reconnect logic without hitting real opencode SDK/network APIs.
+- Route command envelopes over WebSocket and correlate `command_result` responses via `CommandDispatcher.HandleCommandResultEnvelope()` for full request-response lifecycle.
+
+### Recovery and Chaos Pattern
+- Simulate network partitions by force-closing server-side node sockets and waiting for `NodeStatusOffline -> NodeStatusOnline` transitions.
+- For supervisor crash recovery, restart harness over the same SQLite DB and reload state with `LoadNodesFromDB()` and `LoadSessionsFromDB()` before allowing agents to reconnect.
+- For agent crash recovery, stop/restart WS client with same node identity and adapter state to verify session continuity.
+
+### Policy + Event Pipeline Integration
+- Use tracker-backed sessions with synthetic `LastActivity` and token thresholds to trigger `resume_on_idle` and `restart_on_compaction` checks in `PolicyEngine`.
+- Persist policy emissions through `EventPipeline` and assert `policy.action` records in SQLite for end-to-end verification.
+
+### Test Stability Pattern
+- SQLite in concurrent integration tests needs `db.SetMaxOpenConns(1)` plus `PRAGMA busy_timeout` to avoid transient `SQLITE_BUSY` under race mode.
+- Event persistence requires FK-compatible session rows; seed tracker/session table before high-volume event tests.
+- Keep all test infrastructure isolated with temp DBs and `t.Cleanup()` to avoid artifact leakage across runs.
+
+## T22: Observability Package (Structured Logs, Metrics, Health Checks)
+
+### Correlation ID Pattern
+- Context key: `correlationIDKey` (private type to avoid collisions)
+- `WithCorrelationID(ctx, id)` adds ID to context
+- `GetCorrelationID(ctx)` retrieves ID or generates new UUID if missing
+- `LogWithContext(ctx, logger, msg, fields...)` appends correlation_id to all logs
+- HTTP middleware generates UUID for requests without X-Correlation-ID header
+- Correlation ID returned in response header for client tracking
+
+### Prometheus Metrics Architecture
+- Global singleton `Metrics` instance initialized once via `InitMetrics()`
+- `GetMetrics()` returns singleton (safe for concurrent access)
+- All metric methods nil-safe (no-op if receiver is nil)
+- Metrics registered with promauto for automatic Prometheus registration
+
+### Metrics Definitions
+**Counters**:
+- `hal_o_swarm_commands_total{type, status}` - Total commands executed
+- `hal_o_swarm_events_total{type}` - Total events processed
+- `hal_o_swarm_connections_total{status}` - Total connections (accepted/rejected)
+- `hal_o_swarm_errors_total{component, type}` - Total errors by component
+
+**Gauges**:
+- `hal_o_swarm_connections_active` - Current active connections
+- `hal_o_swarm_sessions_active{status}` - Current sessions by status
+- `hal_o_swarm_nodes_online` - Current online nodes
+
+**Histograms**:
+- `hal_o_swarm_command_duration_seconds{type}` - Command execution duration
+- `hal_o_swarm_event_processing_duration_seconds{type}` - Event processing duration
+
+### Health Check Pattern
+- `HealthChecker` struct holds references to all components (db, hub, dispatcher, costs)
+- `CheckLiveness(ctx)` - Always returns healthy if server running (no component checks)
+- `CheckReadiness(ctx)` - Checks all components with 2s timeout per component
+- Component status: `ok`, `error`, `unavailable`
+- Overall status: `healthy` (all ok), `degraded` (some unavailable), `unhealthy` (errors)
+
+### HTTP Endpoints
+- `GET /healthz` - Liveness probe (always 200 OK if server running)
+- `GET /readyz` - Readiness probe (200 OK if healthy, 503 if degraded/unhealthy)
+- `GET /metrics` - Prometheus metrics endpoint (text format)
+- All endpoints return JSON with status, components, timestamp
+
+### Error Logging Pattern
+- All errors logged with `LogErrorWithContext(ctx, logger, msg, err, fields...)`
+- Error logs include: correlation_id, error message, component, error_type
+- Metrics recorded on error: `RecordError(component, errorType)`
+- No silent failures - all errors visible in logs and metrics
+
+### Integration Points
+- `HTTPAPI.SetHealthChecker(hc)` wires health checker to HTTP API
+- `Server.SetHTTPAPI(api)` creates health checker and wires to API
+- `cmd/supervisor/main.go` calls `InitMetrics()` on startup
+- Command handler records metrics: `RecordCommand()`, `RecordCommandDuration()`, `RecordError()`
+
+### Test Coverage (18 tests, all with -race)
+**Metrics Tests**:
+- Initialization, recording commands/events/connections, setting gauges, error recording
+- Nil safety for all metric methods
+- Singleton pattern verification
+
+**Health Check Tests**:
+- Liveness always healthy
+- Readiness with all unavailable components
+- Readiness with individual components available
+- Readiness with all components healthy
+- Timestamp validation
+- Context timeout handling
+
+**HTTP Endpoint Tests**:
+- Liveness endpoint returns 200 OK
+- Readiness endpoint returns 200 or 503 based on component status
+- Metrics endpoint returns Prometheus format
+- Health check result JSON marshaling/unmarshaling
+
+### Key Patterns
+1. **Correlation ID Propagation**: UUID generated per request, included in all logs
+2. **Nil Safety**: All methods safe to call on nil receivers (no-op behavior)
+3. **Component Isolation**: Each component checked independently with timeout
+4. **Graceful Degradation**: Unavailable components don't block readiness check
+5. **Metric Recording**: Automatic on key operations (commands, events, errors)
+6. **No Silent Failures**: All errors logged with context and recorded in metrics
+
+## T21: Security Hardening
+
+### TLS Support Pattern
+- `LoadTLSConfig()` returns `(*tls.Config, nil)` when disabled — nil means no TLS
+- TLS minimum version set to 1.2 (`tls.VersionTLS12`)
+- Self-signed cert generation for tests: `ecdsa.GenerateKey(elliptic.P256())` + `x509.CreateCertificate`
+- WSS testing uses `httptest.NewUnstartedServer` + `server.StartTLS()` with `InsecureSkipVerify` dialer
+
+### Origin Validation Pattern (Strict vs Permissive)
+- `strictOrigin` flag on Hub gates between permissive (legacy) and strict (security-hardened) modes
+- Permissive: empty origin allowed, no allowlist allowed (backward compatible)
+- Strict: empty origin rejected, all origins must match allowlist
+- Pattern matching: exact match, wildcard port (`http://localhost:*`), wildcard subdomain (`https://*.example.com`)
+
+### Token Rotation Pattern
+- `Hub.UpdateAuthToken()` updates under write lock; `ServeWS` reads under read lock
+- `Server.RotateToken()` enforces 32-char minimum and updates both config and hub atomically
+- Background `tokenRotationLoop()` periodically reloads config file and compares tokens
+- Only started if `TokenRotation.Enabled && configPath != ""` — no-op otherwise
+
+### Audit Logging Pattern
+- `AuditLogger.LogCommand()` is fire-and-forget: write failures logged as warnings, never block dispatch
+- Args sanitized via `SanitizeArgs()` which checks keys against secret patterns
+- `PurgeOlderThan(retentionDays)` for retention policy enforcement
+- All fields use RFC3339Nano timestamp format for consistent parsing
+
+### Secret Sanitization (MUST NOT log plaintext secrets)
+- `IsSecretKey()` checks lowercase key name against known secret patterns (token, password, secret, key, api_key, auth, credential)
+- `SanitizeArgs()` replaces secret values with `[REDACTED]` before any persistence
+- Applied before audit log write — secrets never hit the database
+
+### Security Config Design
+- All security features optional (disabled by default) — zero-config backward compatibility
+- `security.origin_allowlist` overrides `server.allowed_origins` when present
+- Defaults applied in `applySecurityDefaults()`: 300s token check interval, 90 day audit retention
+
+## T24: Deployment Artifacts & Operational Documentation
+
+### Systemd Unit Design Pattern
+- **Supervisor unit** (`hal-supervisor.service`):
+  - Type: notify (systemd readiness protocol)
+  - Resource limits: 2GB memory, 80% CPU quota
+  - Restart: on-failure with 10s delay, max 5 restarts in 300s
+  - Security: PrivateTmp, ProtectSystem=strict, ProtectHome=yes
+  - Graceful shutdown: 30s timeout, SIGTERM then SIGKILL
+  - Logging: journal with syslog identifier
+
+- **Agent unit** (`hal-agent.service`):
+  - Type: simple (no readiness protocol)
+  - Resource limits: 4GB memory, 90% CPU quota
+  - Restart: on-failure with 10s delay, max 5 restarts in 300s
+  - Security: PrivateTmp, ProtectSystem=strict, ProtectHome=yes
+  - Graceful shutdown: 30s timeout, SIGTERM then SIGKILL
+  - Logging: journal with syslog identifier
+
+### Installation Script Architecture
+- **Preflight checks** (non-destructive):
+  - OS detection via /etc/os-release
+  - systemd availability (required)
+  - Go compiler check (only if building from source)
+  - Disk space verification (1GB minimum)
+  - Network connectivity test (non-fatal)
+
+- **Component-based installation**:
+  - Supervisor, agent, and halctl can be installed independently
+  - Each component has separate user/group
+  - Each component has separate systemd unit
+  - Each component has separate configuration file
+
+- **Safety mechanisms**:
+  - Dry-run mode (--dry-run) shows what would happen without changes
+  - Configuration files backed up before modification
+  - Existing users/groups skipped if already present
+  - Permissions set correctly for security
+
+- **Customization support**:
+  - Custom installation prefix (--prefix)
+  - Custom config directory (--config-dir)
+  - Custom data directory (--data-dir)
+  - Custom log directory (--log-dir)
+
+### Uninstallation Script Architecture
+- **Safe removal with data preservation**:
+  - Services stopped gracefully before removal
+  - Services disabled from autostart
+  - Systemd units removed
+  - Binaries removed
+  - Configuration backed up with timestamp (default)
+  - Data backed up with timestamp (default)
+  - Logs removed
+  - System users removed
+
+- **Preservation options**:
+  - --preserve-data (default: true) - keeps data with backup
+  - --preserve-config (default: true) - keeps config with backup
+  - --remove-data - deletes data permanently
+  - --remove-config - deletes config permanently
+
+- **Safety mechanisms**:
+  - Dry-run mode shows what would happen
+  - Confirmation prompt before destructive operations
+  - Backup creation with timestamps for recovery
+  - Graceful service shutdown before removal
+
+### Deployment Documentation Pattern
+- **DEPLOYMENT.md** (400+ lines):
+  - Architecture overview with ASCII diagram
+  - Prerequisites (OS, systemd, Go, disk, memory, network)
+  - Installation procedures (quick start, component-specific, custom paths)
+  - Configuration guide (supervisor, agent, environment variables)
+  - Running services (start, stop, restart, enable, status, logs)
+  - Verification procedures (health checks, CLI, logs)
+  - Monitoring (Prometheus metrics, systemd, disk, network)
+  - Troubleshooting (service won't start, connection issues, memory, database, disk)
+  - Security (TLS, origin allowlist, audit logging)
+
+- **RUNBOOK.md** (350+ lines):
+  - Incident classification (Critical/High/Medium/Low)
+  - Supervisor incidents (crash, memory, database corruption)
+  - Agent incidents (connection, memory, crash)
+  - Network incidents (unreachable, latency)
+  - Data incidents (lost data, cost discrepancy)
+  - Escalation procedures (when, how, contacts)
+
+- **ROLLBACK.md** (350+ lines):
+  - Pre-rollback checklist
+  - Version rollback (supervisor, agent, multi-agent)
+  - Configuration rollback (supervisor, agent)
+  - Data recovery (backup restoration, point-in-time)
+  - Verification procedures (post-rollback checks)
+  - Rollback scenarios (API broken, config broken, database corrupted)
+  - Prevention strategies (backups, testing, monitoring)
+
+### README.md Architecture
+- Project overview with architecture diagram
+- Quick start guide (install, configure, start, verify)
+- Feature list (session management, events, costs, policies, Discord, API, CLI)
+- Configuration examples (supervisor, agent)
+- Development guide (structure, building, testing)
+- Monitoring (health checks, metrics)
+- Troubleshooting (common issues)
+- Security (TLS, origin allowlist, audit)
+- Performance (hardware, optimization)
+- Contributing guidelines
+- License and support
+
+### Shell Script Best Practices Applied
+- **Error handling**: `set -euo pipefail` for fail-fast behavior
+- **Logging**: Color-coded output (info, success, warn, error)
+- **Validation**: Comprehensive preflight checks before destructive operations
+- **Idempotency**: Safe to run multiple times (checks before creating)
+- **Dry-run mode**: Preview changes without making them
+- **Help documentation**: Comprehensive --help output
+- **Custom paths**: Support for non-standard installation locations
+- **Confirmation prompts**: Ask before destructive operations
+- **Backup creation**: Automatic backups with timestamps
+- **Error recovery**: Clear error messages with recovery steps
+
+### Documentation Quality Standards
+- **Completeness**: All procedures documented with step-by-step instructions
+- **Clarity**: Clear language, no jargon without explanation
+- **Examples**: Real-world examples for all procedures
+- **Cross-references**: Links between related documentation
+- **Troubleshooting**: Common issues and solutions
+- **Prevention**: Proactive measures to avoid issues
+- **Escalation**: Clear criteria for when to escalate
+- **Contact info**: Support channels and escalation paths
+
+### Key Patterns for Production Deployment
+1. **Graceful shutdown**: Services stop cleanly with timeout
+2. **Resource limits**: Memory and CPU quotas prevent runaway processes
+3. **Security hardening**: PrivateTmp, ProtectSystem, ProtectHome
+4. **Automatic restart**: Services restart on failure with backoff
+5. **Logging**: All output goes to journal for centralized logging
+6. **Data preservation**: Backups created before destructive operations
+7. **Verification**: Health checks and status commands verify operation
+8. **Monitoring**: Prometheus metrics and systemd monitoring
+9. **Troubleshooting**: Comprehensive runbook for common issues
+10. **Rollback**: Safe procedures for reverting changes
+
+### Blockers Resolved
+- None - Task completed without blockers
+
+### Next Steps (T25+)
+- T25: Implement Kubernetes deployment manifests
+- T26: Add Helm chart for Kubernetes deployment
+- T27: Implement multi-region federation
+- T28: Add web UI dashboard
+- T29: Implement advanced analytics and reporting

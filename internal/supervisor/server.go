@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,37 +15,86 @@ import (
 
 // Server represents the supervisor daemon with lifecycle management.
 type Server struct {
-	cfg     *config.SupervisorConfig
-	logger  *zap.Logger
-	hub     *Hub
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	mu      sync.Mutex
-	running bool
+	cfg        *config.SupervisorConfig
+	configPath string
+	logger     *zap.Logger
+	hub        *Hub
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	mu         sync.Mutex
+	running    bool
 
 	httpAPI      *HTTPAPI
 	httpShutdown func(ctx context.Context) error
 	costs        *CostAggregator
+	audit        *AuditLogger
+	tlsConfig    *tls.Config
 }
 
 // NewServer creates a new supervisor server instance.
 func NewServer(cfg *config.SupervisorConfig, logger *zap.Logger) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	origins := cfg.Server.AllowedOrigins
+	if len(cfg.Security.OriginAllowlist) > 0 {
+		origins = cfg.Security.OriginAllowlist
+	}
+
+	hub := NewHub(
+		ctx,
+		cfg.Server.AuthToken,
+		origins,
+		time.Duration(cfg.Server.HeartbeatIntervalSec)*time.Second,
+		cfg.Server.HeartbeatTimeoutCount,
+		logger,
+	)
+
+	if len(cfg.Security.OriginAllowlist) > 0 {
+		hub.SetStrictOrigin(true)
+	}
+
 	return &Server{
 		cfg:    cfg,
 		logger: logger,
-		hub: NewHub(
-			ctx,
-			cfg.Server.AuthToken,
-			cfg.Server.AllowedOrigins,
-			time.Duration(cfg.Server.HeartbeatIntervalSec)*time.Second,
-			cfg.Server.HeartbeatTimeoutCount,
-			logger,
-		),
+		hub:    hub,
 		ctx:    ctx,
 		cancel: cancel,
 	}
+}
+
+func (s *Server) SetTLSConfig(tlsCfg *tls.Config) {
+	s.tlsConfig = tlsCfg
+}
+
+func (s *Server) SetAuditLogger(audit *AuditLogger) {
+	s.audit = audit
+}
+
+func (s *Server) AuditLogger() *AuditLogger {
+	return s.audit
+}
+
+func (s *Server) SetConfigPath(path string) {
+	s.configPath = path
+}
+
+func (s *Server) RotateToken(newToken string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(newToken) < 32 {
+		return fmt.Errorf("token must be at least 32 characters")
+	}
+
+	s.cfg.Server.AuthToken = newToken
+
+	if s.hub != nil {
+		s.hub.UpdateAuthToken(newToken)
+	}
+
+	s.logger.Info("auth token rotated successfully")
+	return nil
 }
 
 // Start initializes and starts the supervisor server.
@@ -167,9 +217,41 @@ func (s *Server) maintenanceLoop() {
 
 	s.logger.Debug("maintenance loop started")
 
+	if s.cfg.Security.TokenRotation.Enabled && s.configPath != "" {
+		go s.tokenRotationLoop()
+	}
+
 	<-s.ctx.Done()
 
 	s.logger.Debug("maintenance loop stopped")
+}
+
+func (s *Server) tokenRotationLoop() {
+	interval := time.Duration(s.cfg.Security.TokenRotation.CheckIntervalSeconds) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			newCfg, err := config.LoadSupervisorConfig(s.configPath)
+			if err != nil {
+				s.logger.Debug("token rotation config reload skipped", zap.Error(err))
+				continue
+			}
+			s.mu.Lock()
+			currentToken := s.cfg.Server.AuthToken
+			s.mu.Unlock()
+
+			if newCfg.Server.AuthToken != currentToken {
+				if err := s.RotateToken(newCfg.Server.AuthToken); err != nil {
+					s.logger.Warn("token rotation failed", zap.Error(err))
+				}
+			}
+		case <-s.ctx.Done():
+			return
+		}
+	}
 }
 
 // IsRunning returns whether the server is currently running.
@@ -193,6 +275,8 @@ func (s *Server) SetHTTPAPI(api *HTTPAPI) {
 	if s.costs != nil {
 		s.httpAPI.SetCostAggregator(s.costs)
 	}
+	hc := NewHealthChecker(nil, s.hub, nil, s.costs)
+	s.httpAPI.SetHealthChecker(hc)
 }
 
 func (s *Server) SetCostAggregator(aggregator *CostAggregator) {

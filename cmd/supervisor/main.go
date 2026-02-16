@@ -39,6 +39,9 @@ func main() {
 
 	srv := supervisor.NewServer(cfg, logger)
 
+	supervisor.InitMetrics()
+	logger.Info("metrics initialized")
+
 	if cfg.Server.HTTPPort > 0 {
 		api := supervisor.NewHTTPAPI(nil, nil, nil, nil, cfg.Server.AuthToken, logger)
 		srv.SetHTTPAPI(api)
