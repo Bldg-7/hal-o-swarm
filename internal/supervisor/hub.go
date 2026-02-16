@@ -37,6 +37,9 @@ type Hub struct {
 	logger   *zap.Logger
 	mu       sync.RWMutex
 	ctx      context.Context
+
+	credentialRegistry  *NodeRegistry
+	expectedCredVersion int64
 }
 
 func NewHub(
@@ -215,6 +218,28 @@ func (h *Hub) SetAllowedOrigins(origins []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.allowedOrigins = origins
+}
+
+func (h *Hub) ConfigureCredentialReconciliation(registry *NodeRegistry, expectedVersion int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.credentialRegistry = registry
+	h.expectedCredVersion = expectedVersion
+}
+
+func (h *Hub) reconcileCredentialSync(payload []byte) {
+	h.mu.RLock()
+	registry := h.credentialRegistry
+	expectedVersion := h.expectedCredVersion
+	h.mu.RUnlock()
+
+	if registry == nil {
+		return
+	}
+
+	if err := registry.HandleCredentialSyncMessage(payload, expectedVersion); err != nil {
+		h.logger.Warn("credential sync reconciliation failed", zap.Error(err))
+	}
 }
 
 func (h *Hub) checkHeartbeats() {

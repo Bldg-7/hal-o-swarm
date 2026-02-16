@@ -386,3 +386,228 @@ type NodeEntry struct {
 - All 8 WSClient tests pass (6 existing + 2 new)
 - No existing behavior broken (heartbeat, events, reconnect, snapshot)
 - No LSP errors in wsclient.go or wsclient_test.go
+
+---
+
+## Task 7: Credential Push Command Contract
+
+### Completed
+- Added `CommandTypeCredentialPush = "credential_push"` to supervisor command enum
+- Extended `ParseCommandIntent()` aliases with `credential_push`, `push_credentials`, `/push_credentials`
+- Added `CommandTypeCredentialPush` to `IsSupportedCommandType()`
+- Added `Validate() error` on `CredentialPushPayload` as canonical payload validation
+- Added `TestCredentialPushEnvelopeRoundTrip` for full Envelope + payload marshal/unmarshal flow
+- Added `TestCredentialPushRejectsInvalidPayload` to verify reject/accept validation paths
+
+### Validation Rules Implemented
+- Reject empty `target_node`
+- Reject nil/empty `env_vars`
+- Reject empty env var values (`env_vars.KEY must not be empty`)
+
+### Contract and Protocol Notes
+- Canonical payload schema remains `internal/shared/auth_types.go:CredentialPushPayload`
+- Envelope round-trip uses `MessageTypeConfigUpdate` and `ProtocolVersion` unchanged
+- No struct field changes and no dependency additions
+
+### Verification
+- `go test ./internal/shared/... -run TestCredentialPush -v` passes
+- `go test ./internal/supervisor/... -run TestCommandType -v` passes (`no tests to run` in current suite)
+- Evidence files created:
+  - `.sisyphus/evidence/task-7-contract-pass.txt`
+  - `.sisyphus/evidence/task-7-contract-fail.txt`
+
+---
+
+## Task 8: Credential Push Command Issuance Endpoint
+
+### Completed
+- Added `POST /api/v1/commands/credentials/push` route to `Handler()` mux
+- Implemented `handleCredentialPush` handler on HTTPAPI
+- Route protected by `requireAuth` middleware (Bearer token)
+- Handler decodes `CredentialPushPayload`, validates, builds `Command`, dispatches
+
+### Endpoint Contract
+
+- **Method**: `POST`
+- **Path**: `/api/v1/commands/credentials/push`
+- **Auth**: Bearer token required (401 if missing/wrong)
+- **Request Body**: `{"target_node": "...", "env_vars": {"KEY": "VAL"}, "version": 1}`
+- **Success**: 200 with `{"data": {"command_id": "...", "status": "success", ...}}`
+- **Validation Error**: 400 with `{"error": "validation error: ...", "code": "VALIDATION_ERROR"}`
+- **Bad JSON**: 400 with `{"error": "invalid request body", "code": "BAD_REQUEST"}`
+- **No Dispatcher**: 503 with `{"error": "command dispatcher unavailable", "code": "SERVICE_UNAVAILABLE"}`
+- **Dispatch Failure**: 500 with `{"error": "command dispatch failed", "code": "DISPATCH_ERROR"}`
+
+### Handler Implementation Details
+
+1. Checks dispatcher availability (503 if nil)
+2. Decodes JSON into `shared.CredentialPushPayload` (400 on parse error)
+3. Calls `payload.Validate()` (400 on validation error with descriptive message)
+4. Builds `Command` with `CommandTypeCredentialPush`, `CommandTarget{NodeID: payload.TargetNode}`, args map
+5. Creates timeout context = `EffectiveTimeout() + 5s`
+6. Dispatches via `a.dispatcher.DispatchCommand(ctx, cmd)`
+7. Records metrics if `a.metrics != nil` (follows existing handleCommand pattern)
+8. Returns `commandResultJSON` wrapped in `apiResponse`
+
+### Key Design Decisions
+
+1. **Dedicated endpoint vs generic /commands**: Separate endpoint enables stronger typing and validation specific to credential push, rather than routing through generic command handler
+2. **NodeID targeting**: Uses `CommandTarget{NodeID: ...}` not `{Project: ...}` since credential push targets specific nodes
+3. **Metrics recording**: Follows exact pattern from `handleCommand` — RecordCommand + RecordCommandDuration on success, RecordCommand + RecordError on failure
+4. **No manual SanitizeArgs**: Audit logging via `audit.LogCommand` already calls `SanitizeArgs` automatically
+
+### Test Coverage (6 subtests)
+
+- **happy path**: Valid payload + mock transport → 200 + success result
+- **unauthorized**: No bearer token → 401 + AUTH_REQUIRED
+- **validation error empty target**: Empty target_node → 400 + VALIDATION_ERROR
+- **validation error empty env_vars**: Empty env_vars map → 400 + VALIDATION_ERROR
+- **invalid json body**: Malformed JSON → 400 + BAD_REQUEST
+- **dispatcher unavailable**: Nil dispatcher → 503 + SERVICE_UNAVAILABLE
+
+### Test Results
+- All 6 new subtests pass
+- All existing supervisor tests pass (zero regressions)
+- No LSP errors in http_api.go or http_api_test.go
+- Evidence files: `.sisyphus/evidence/task-8-api-pass.json`, `.sisyphus/evidence/task-8-api-fail.json`
+
+---
+
+## Task 9: Agent Credential Apply Module
+
+### Completed
+- Added `internal/agent/credential_apply.go` with `CredentialApplier` runtime-scoped store (`map[string]string`) and version tracking
+- Added `HandleCredentialPush(applier)` command handler factory for `CommandHandler` contract
+- Added `RegisterCredentialPushHandler(client, applier)` to wire `credential_push` via `RegisterCommandHandler("credential_push", ...)`
+- Added `internal/agent/credential_apply_test.go` with happy-path, malformed payload, masking, version tracking, registration, and concurrency coverage
+
+### Handler Contract Details
+- Command payload is unmarshaled from `envelope.Payload` as full command object and extracts:
+  - `target.node_id` → `CredentialPushPayload.TargetNode`
+  - `args.env_vars` → `CredentialPushPayload.EnvVars`
+  - `args.version` → `CredentialPushPayload.Version`
+- Handler validates and applies via `applier.Apply(payload)` and returns errors to WS command router without panic
+
+### Security and Runtime Scope
+- No `os.Setenv()` usage; credentials remain in `CredentialApplier.envVars` map for subprocess-scoped env injection
+- `MaskValue` redacts any stored credential value as `[REDACTED]`
+- Success logs include masked env map only (`zap.Any("env_vars", maskedEnv)`) and never plaintext secrets
+
+### Concurrency and Thread Safety
+- All `envVars` and `version` reads/writes are guarded by `sync.RWMutex`
+- `GetEnv` returns defensive copy to prevent external mutation
+- Concurrent `Apply` + `GetEnv` exercised with race-enabled test
+
+### Verification
+- `go test ./internal/agent/... -count=1 -timeout 60s` passes
+- `go test ./internal/agent/... -race -count=1 -timeout 60s` passes
+- Evidence files created:
+  - `.sisyphus/evidence/task-9-apply-pass.txt`
+  - `.sisyphus/evidence/task-9-apply-fail.txt`
+
+---
+
+## Task 11: Secure Audit Integration for Push Commands
+
+### Completed
+- Added `auditLogger *AuditLogger` field to `HTTPAPI` struct
+- Added `SetAuditLogger(al *AuditLogger)` method on HTTPAPI
+- Modified `handleCredentialPush` to call `a.auditLogger.LogCommand()` after dispatch
+- Audit captures both success and failure paths (call placed before error branching)
+- Actor defaults to "api", IP from `r.RemoteAddr`, duration from handler start
+
+### Critical Bug Found and Fixed: map[string]string Bypass
+- `payload.EnvVars` is `map[string]string` (from CredentialPushPayload)
+- `sanitizeValue()` only matches `map[string]interface{}` — `map[string]string` falls through to default case
+- Without conversion, nested env var secrets would NOT be redacted in audit logs
+- Fix: Convert `payload.EnvVars` to `map[string]interface{}` before storing in `Command.Args`
+- This ensures `SanitizeArgs` recursively traverses and applies `IsSecretKey` to each env var name
+
+### IsSecretKey Coverage Verification
+- `ANTHROPIC_API_KEY` → contains "key" → caught
+- `OPENAI_API_KEY` → contains "key" → caught
+- `DATABASE_PASSWORD` → contains "password" → caught
+- `AWS_SECRET_ACCESS_KEY` → contains "secret" and "key" → caught
+- `env_vars` key itself does NOT match (correct — it's not a secret, the children are)
+
+### Test Coverage
+- `TestAuditCredentialPushRedaction`: Verifies 4 different secret env var values are fully redacted in audit DB
+- `TestAuditCredentialPushMetadata/success`: Verifies action="credential_push", target=NodeID, result="success", actor, IP, duration
+- `TestAuditCredentialPushMetadata/failure`: Verifies failure path records error message
+
+### Key Design Decisions
+1. **Audit before error check**: `LogCommand` placed after dispatch but before error branching, capturing both outcomes
+2. **Type conversion for safety**: `map[string]string` → `map[string]interface{}` prevents sanitization bypass
+3. **No SanitizeArgs modification**: Fix applied at the caller level, preserving T5's recursive logic
+4. **Nil-safe**: `if a.auditLogger != nil` guard prevents panic when audit logger isn't wired
+
+### Test Results
+- All supervisor tests pass (zero regressions)
+- 3 new test cases pass (1 redaction + 2 metadata subtests)
+- Evidence: `.sisyphus/evidence/task-11-audit-pass.txt`, `.sisyphus/evidence/task-11-audit-fail.txt`
+
+---
+
+## Task 10: Credential Push Idempotency and Replay Safety
+
+### Completed
+- Extended `handleCredentialPush` request decoding to accept `idempotency_key`
+- Passed `idempotency_key` through to `Command.IdempotencyKey` for dispatcher integration
+- Added credential push endpoint-level idempotency cache keyed by `idempotency_key` (bounded to 1000 entries)
+- Added agent-side command replay protection in `CredentialApplier` with bounded applied command ID set (1000 entries)
+- Added supervisor tests: `TestCredentialPushIdempotency`, `TestCredentialPushIdempotencyDifferentPayload`
+- Added agent test: `TestCredentialApplierRejectsDuplicate`
+
+### Supervisor-Side Notes
+- `DispatchCommand` idempotency still runs for first submission and for any replay after API process restart
+- Endpoint-level cache enforces first-write-wins semantics for identical idempotency key, including different payload submissions in same process lifetime
+- Duplicate requests return the original cached `CommandResult` without re-dispatching to transport (`CallCount()==1` asserted)
+
+### Agent-Side Replay Safety
+- `CredentialApplier.ApplyIfNew(commandID, payload)` now performs atomic duplicate check + apply under lock
+- Duplicate `command_id` returns no-op success and preserves previously applied env/version
+- Eviction is FIFO bounded to 1000 command IDs to prevent unbounded memory growth
+
+### Validation and Evidence
+- Required test suites pass:
+  - `go test ./internal/supervisor/... -count=1 -timeout 60s`
+  - `go test ./internal/agent/... -count=1 -timeout 60s`
+- Evidence files created:
+  - `.sisyphus/evidence/task-10-idem-pass.txt`
+  - `.sisyphus/evidence/task-10-idem-fail.txt`
+
+---
+
+## Task 12: Reconnect Credential Reconciliation Policy
+
+### Completed
+- Added `MessageTypeCredentialSync = "credential_sync"` to shared protocol message constants
+- Added agent-side reconnect hook support in `WSClient` via `WithOnConnectHook` and execution in `dialAndServe`
+- Added `CredentialVersionReport` and `BuildVersionReport(nodeID)` on `CredentialApplier`
+- Added `RegisterCredentialSyncOnReconnect(client, applier, nodeID)` to emit `credential_sync` on each connect/reconnect
+- Added supervisor-side `CredentialSyncStatus` enum and registry fields on `NodeEntry`:
+  - `CredSyncStatus` (`unknown` | `in_sync` | `drift_detected`)
+  - `CredVersion` (reported version)
+- Added `ReconcileCredentialVersion(nodeID, reportedVersion, expectedVersion)` to `NodeRegistry`
+- Added `HandleCredentialSyncMessage(payload, expectedVersion)` for parse + compare + registry update flow
+- Added hub credential reconciliation plumbing:
+  - `ConfigureCredentialReconciliation(registry, expectedVersion)`
+  - `agent_conn` handles `credential_sync` envelopes and forwards payload for reconciliation
+- Added `Server.SetRegistry(registry)` wiring to configure hub reconciliation using `cfg.Credentials.Version`
+
+### Test Coverage Added
+- `TestRegisterCredentialSyncOnReconnect` (agent): verifies `credential_sync` is sent on connect and reconnect with `node_id` + `credential_version`
+- `TestReconnectCredentialReconciliation` (supervisor): reconnect path with expected=1 and reported=1 yields `in_sync`
+- `TestReconnectCredentialDrift` (supervisor): expected=2 and reported=1 yields `drift_detected`
+- Unknown pre-report state validated in `TestReconnectCredentialReconciliation` before first sync message
+
+### Key Decisions
+1. Introduced a separate `credential_sync` message instead of changing heartbeat payload (protocol-safe and aligned with policy requirement)
+2. Kept reconciliation additive and non-destructive: status is tracked, no automatic re-push behavior
+3. Kept sync state in memory (`NodeEntry`) like auth summary fields from prior tasks, avoiding schema churn
+
+### Verification
+- `go test ./internal/... -count=1 -timeout 60s` passes
+- Evidence files:
+  - `.sisyphus/evidence/task-12-reconcile-pass.txt`
+  - `.sisyphus/evidence/task-12-reconcile-fail.txt`

@@ -13,10 +13,16 @@ import (
 
 type NodeStatus string
 
+type CredentialSyncStatus string
+
 const (
 	NodeStatusOnline   NodeStatus = "online"
 	NodeStatusOffline  NodeStatus = "offline"
 	NodeStatusDegraded NodeStatus = "degraded"
+
+	CredentialSyncStatusInSync        CredentialSyncStatus = "in_sync"
+	CredentialSyncStatusDriftDetected CredentialSyncStatus = "drift_detected"
+	CredentialSyncStatusUnknown       CredentialSyncStatus = "unknown"
 )
 
 // NodeAuthState represents the authentication status for a tool on a node.
@@ -29,16 +35,18 @@ type NodeAuthState struct {
 }
 
 type NodeEntry struct {
-	ID            string
-	Hostname      string
-	Address       string
-	Projects      []string
-	Capabilities  []string
-	Status        NodeStatus
-	LastHeartbeat time.Time
-	ConnectedAt   time.Time
-	AuthStates    map[string]NodeAuthState `json:"auth_states,omitempty"`
-	AuthUpdatedAt time.Time                `json:"auth_updated_at,omitempty"`
+	ID             string
+	Hostname       string
+	Address        string
+	Projects       []string
+	Capabilities   []string
+	Status         NodeStatus
+	LastHeartbeat  time.Time
+	ConnectedAt    time.Time
+	CredSyncStatus CredentialSyncStatus     `json:"cred_sync_status,omitempty"`
+	CredVersion    int                      `json:"cred_version,omitempty"`
+	AuthStates     map[string]NodeAuthState `json:"auth_states,omitempty"`
+	AuthUpdatedAt  time.Time                `json:"auth_updated_at,omitempty"`
 }
 
 var ErrNodeNotFound = errors.New("node not found")
@@ -79,6 +87,9 @@ func (r *NodeRegistry) Register(node NodeEntry) error {
 	}
 	node.Status = NodeStatusOnline
 	node.LastHeartbeat = now
+	if node.CredSyncStatus == "" {
+		node.CredSyncStatus = CredentialSyncStatusUnknown
+	}
 
 	if err := r.upsertNode(node); err != nil {
 		return fmt.Errorf("register node %s: %w", node.ID, err)
@@ -207,6 +218,36 @@ func (r *NodeRegistry) GetAuthState(nodeID string) map[string]NodeAuthState {
 	return make(map[string]NodeAuthState)
 }
 
+func (r *NodeRegistry) ReconcileCredentialVersion(nodeID string, reportedVersion int, expectedVersion int64) error {
+	r.mu.Lock()
+	node, ok := r.nodes[nodeID]
+	r.mu.Unlock()
+
+	if !ok {
+		fromDB, err := r.readNode(nodeID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNodeNotFound
+			}
+			return fmt.Errorf("reconcile credential version %s: %w", nodeID, err)
+		}
+		node = fromDB
+	}
+
+	node.CredVersion = reportedVersion
+	if int64(reportedVersion) == expectedVersion {
+		node.CredSyncStatus = CredentialSyncStatusInSync
+	} else {
+		node.CredSyncStatus = CredentialSyncStatusDriftDetected
+	}
+
+	r.mu.Lock()
+	r.nodes[nodeID] = node
+	r.mu.Unlock()
+
+	return nil
+}
+
 func (r *NodeRegistry) LoadNodesFromDB() error {
 	if _, err := r.db.Exec(`UPDATE nodes SET status = ?`, string(NodeStatusOffline)); err != nil {
 		return fmt.Errorf("load nodes: mark offline: %w", err)
@@ -299,9 +340,10 @@ func scanNodeRow(rows *sql.Rows) (NodeEntry, error) {
 	}
 
 	entry := NodeEntry{
-		ID:       id,
-		Hostname: hostname,
-		Status:   NodeStatus(statusRaw),
+		ID:             id,
+		Hostname:       hostname,
+		Status:         NodeStatus(statusRaw),
+		CredSyncStatus: CredentialSyncStatusUnknown,
 	}
 
 	if lastHeartbeat.Valid {
@@ -337,9 +379,10 @@ func scanNodeSingleRow(row *sql.Row) (NodeEntry, error) {
 	}
 
 	entry := NodeEntry{
-		ID:       id,
-		Hostname: hostname,
-		Status:   NodeStatus(statusRaw),
+		ID:             id,
+		Hostname:       hostname,
+		Status:         NodeStatus(statusRaw),
+		CredSyncStatus: CredentialSyncStatusUnknown,
 	}
 
 	if lastHeartbeat.Valid {

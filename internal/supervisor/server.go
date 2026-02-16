@@ -24,6 +24,7 @@ type Server struct {
 	wg         sync.WaitGroup
 	mu         sync.Mutex
 	running    bool
+	registry   *NodeRegistry
 
 	httpAPI      *HTTPAPI
 	httpShutdown func(ctx context.Context) error
@@ -268,6 +269,13 @@ func (s *Server) Context() context.Context {
 
 func (s *Server) Hub() *Hub {
 	return s.hub
+}
+
+func (s *Server) SetRegistry(registry *NodeRegistry) {
+	s.registry = registry
+	if s.hub != nil && registry != nil {
+		s.hub.ConfigureCredentialReconciliation(registry, s.cfg.Credentials.Version)
+	}
 }
 
 func (s *Server) SetHTTPAPI(api *HTTPAPI) {

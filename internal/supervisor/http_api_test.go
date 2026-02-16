@@ -624,3 +624,310 @@ func TestHTTPAPIErrorResponseContentType(t *testing.T) {
 		t.Errorf("expected application/json for error, got %s", ct)
 	}
 }
+
+func TestHandleCredentialPush(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		db := setupSupervisorTestDB(t)
+		logger := zap.NewNop()
+
+		registry := NewNodeRegistry(db, logger)
+		tracker := NewSessionTracker(db, logger)
+
+		seedNode(t, registry, "node-cred", "host-cred")
+
+		var dispatcher *CommandDispatcher
+		transport := &mockCommandTransport{}
+		transport.onSend = func(nodeID string, cmd Command) {
+			go func(cmdID string) {
+				time.Sleep(10 * time.Millisecond)
+				dispatcher.HandleCommandResult(CommandResult{
+					CommandID: cmdID,
+					Status:    CommandStatusSuccess,
+					Output:    "credentials applied",
+					Timestamp: time.Now().UTC(),
+				})
+			}(cmd.CommandID)
+		}
+		dispatcher = NewCommandDispatcherWithTransport(db, registry, tracker, transport, logger)
+
+		api := NewHTTPAPI(registry, tracker, dispatcher, db, testAuthToken, logger)
+		handler := api.Handler()
+
+		body := `{"target_node":"node-cred","env_vars":{"API_KEY":"test-value-123"},"version":1}`
+		req := authRequest("POST", "/api/v1/commands/credentials/push", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp struct {
+			Data commandResultJSON `json:"data"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Data.Status != CommandStatusSuccess {
+			t.Errorf("expected success, got %s", resp.Data.Status)
+		}
+		if resp.Data.Output != "credentials applied" {
+			t.Errorf("expected 'credentials applied', got %s", resp.Data.Output)
+		}
+	})
+
+	t.Run("unauthorized", func(t *testing.T) {
+		api, _, _, _ := setupHTTPAPIWithDispatcher(t)
+		handler := api.Handler()
+
+		body := `{"target_node":"node-1","env_vars":{"KEY":"val"},"version":1}`
+		req := httptest.NewRequest("POST", "/api/v1/commands/credentials/push", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", w.Code)
+		}
+
+		var errResp apiError
+		json.NewDecoder(w.Body).Decode(&errResp)
+		if errResp.Code != "AUTH_REQUIRED" {
+			t.Errorf("expected AUTH_REQUIRED, got %s", errResp.Code)
+		}
+	})
+
+	t.Run("validation error empty target", func(t *testing.T) {
+		api, _, _, _ := setupHTTPAPIWithDispatcher(t)
+		handler := api.Handler()
+
+		body := `{"target_node":"","env_vars":{"KEY":"val"},"version":1}`
+		req := authRequest("POST", "/api/v1/commands/credentials/push", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var errResp apiError
+		json.NewDecoder(w.Body).Decode(&errResp)
+		if errResp.Code != "VALIDATION_ERROR" {
+			t.Errorf("expected VALIDATION_ERROR, got %s", errResp.Code)
+		}
+		if !strings.Contains(errResp.Error, "target_node") {
+			t.Errorf("expected error to mention target_node, got %s", errResp.Error)
+		}
+	})
+
+	t.Run("validation error empty env_vars", func(t *testing.T) {
+		api, _, _, _ := setupHTTPAPIWithDispatcher(t)
+		handler := api.Handler()
+
+		body := `{"target_node":"node-1","env_vars":{},"version":1}`
+		req := authRequest("POST", "/api/v1/commands/credentials/push", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var errResp apiError
+		json.NewDecoder(w.Body).Decode(&errResp)
+		if errResp.Code != "VALIDATION_ERROR" {
+			t.Errorf("expected VALIDATION_ERROR, got %s", errResp.Code)
+		}
+	})
+
+	t.Run("invalid json body", func(t *testing.T) {
+		api, _, _, _ := setupHTTPAPIWithDispatcher(t)
+		handler := api.Handler()
+
+		req := authRequest("POST", "/api/v1/commands/credentials/push", `{invalid json`)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+
+		var errResp apiError
+		json.NewDecoder(w.Body).Decode(&errResp)
+		if errResp.Code != "BAD_REQUEST" {
+			t.Errorf("expected BAD_REQUEST, got %s", errResp.Code)
+		}
+	})
+
+	t.Run("dispatcher unavailable", func(t *testing.T) {
+		api, _, _ := setupHTTPAPI(t)
+		handler := api.Handler()
+
+		body := `{"target_node":"node-1","env_vars":{"KEY":"val"},"version":1}`
+		req := authRequest("POST", "/api/v1/commands/credentials/push", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d", w.Code)
+		}
+	})
+}
+
+func TestCredentialPushIdempotency(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	logger := zap.NewNop()
+
+	registry := NewNodeRegistry(db, logger)
+	tracker := NewSessionTracker(db, logger)
+	seedNode(t, registry, "node-idem", "host-idem")
+
+	var dispatcher *CommandDispatcher
+	transport := &mockCommandTransport{}
+	transport.onSend = func(nodeID string, cmd Command) {
+		if cmd.IdempotencyKey != "idem-key-1" {
+			t.Errorf("expected idempotency key to pass through, got %q", cmd.IdempotencyKey)
+		}
+		go func(commandID string) {
+			time.Sleep(10 * time.Millisecond)
+			dispatcher.HandleCommandResult(CommandResult{
+				CommandID: commandID,
+				Status:    CommandStatusSuccess,
+				Output:    "credentials applied",
+				Timestamp: time.Now().UTC(),
+			})
+		}(cmd.CommandID)
+	}
+	dispatcher = NewCommandDispatcherWithTransport(db, registry, tracker, transport, logger)
+
+	api := NewHTTPAPI(registry, tracker, dispatcher, db, testAuthToken, logger)
+	handler := api.Handler()
+
+	body := `{"target_node":"node-idem","env_vars":{"API_KEY":"value-1"},"version":1,"idempotency_key":"idem-key-1"}`
+	firstReq := authRequest("POST", "/api/v1/commands/credentials/push", body)
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstW := httptest.NewRecorder()
+	handler.ServeHTTP(firstW, firstReq)
+
+	if firstW.Code != http.StatusOK {
+		t.Fatalf("first request expected 200, got %d: %s", firstW.Code, firstW.Body.String())
+	}
+
+	var firstResp struct {
+		Data commandResultJSON `json:"data"`
+	}
+	if err := json.NewDecoder(firstW.Body).Decode(&firstResp); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+
+	secondReq := authRequest("POST", "/api/v1/commands/credentials/push", body)
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondW := httptest.NewRecorder()
+	handler.ServeHTTP(secondW, secondReq)
+
+	if secondW.Code != http.StatusOK {
+		t.Fatalf("second request expected 200, got %d: %s", secondW.Code, secondW.Body.String())
+	}
+
+	var secondResp struct {
+		Data commandResultJSON `json:"data"`
+	}
+	if err := json.NewDecoder(secondW.Body).Decode(&secondResp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+
+	if firstResp.Data.CommandID == "" {
+		t.Fatal("expected non-empty command_id")
+	}
+	if firstResp.Data.CommandID != secondResp.Data.CommandID {
+		t.Fatalf("expected cached command_id, got %q vs %q", firstResp.Data.CommandID, secondResp.Data.CommandID)
+	}
+	if secondResp.Data.Status != CommandStatusSuccess {
+		t.Fatalf("expected cached success status, got %s", secondResp.Data.Status)
+	}
+	if firstResp.Data.Output != secondResp.Data.Output {
+		t.Fatalf("expected cached output, got %q vs %q", firstResp.Data.Output, secondResp.Data.Output)
+	}
+	if transport.CallCount() != 1 {
+		t.Fatalf("expected one transport send due idempotency, got %d", transport.CallCount())
+	}
+}
+
+func TestCredentialPushIdempotencyDifferentPayload(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	logger := zap.NewNop()
+
+	registry := NewNodeRegistry(db, logger)
+	tracker := NewSessionTracker(db, logger)
+	seedNode(t, registry, "node-idem-diff", "host-idem-diff")
+
+	var dispatcher *CommandDispatcher
+	transport := &mockCommandTransport{}
+	transport.onSend = func(nodeID string, cmd Command) {
+		go func(commandID string) {
+			time.Sleep(10 * time.Millisecond)
+			dispatcher.HandleCommandResult(CommandResult{
+				CommandID: commandID,
+				Status:    CommandStatusSuccess,
+				Output:    "first-payload-applied",
+				Timestamp: time.Now().UTC(),
+			})
+		}(cmd.CommandID)
+	}
+	dispatcher = NewCommandDispatcherWithTransport(db, registry, tracker, transport, logger)
+
+	api := NewHTTPAPI(registry, tracker, dispatcher, db, testAuthToken, logger)
+	handler := api.Handler()
+
+	firstBody := `{"target_node":"node-idem-diff","env_vars":{"API_KEY":"value-1"},"version":1,"idempotency_key":"idem-key-diff"}`
+	firstReq := authRequest("POST", "/api/v1/commands/credentials/push", firstBody)
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstW := httptest.NewRecorder()
+	handler.ServeHTTP(firstW, firstReq)
+
+	if firstW.Code != http.StatusOK {
+		t.Fatalf("first request expected 200, got %d: %s", firstW.Code, firstW.Body.String())
+	}
+
+	var firstResp struct {
+		Data commandResultJSON `json:"data"`
+	}
+	if err := json.NewDecoder(firstW.Body).Decode(&firstResp); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+
+	secondBody := `{"target_node":"node-idem-diff","env_vars":{"API_KEY":"value-2"},"version":2,"idempotency_key":"idem-key-diff"}`
+	secondReq := authRequest("POST", "/api/v1/commands/credentials/push", secondBody)
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondW := httptest.NewRecorder()
+	handler.ServeHTTP(secondW, secondReq)
+
+	if secondW.Code != http.StatusOK {
+		t.Fatalf("second request expected 200, got %d: %s", secondW.Code, secondW.Body.String())
+	}
+
+	var secondResp struct {
+		Data commandResultJSON `json:"data"`
+	}
+	if err := json.NewDecoder(secondW.Body).Decode(&secondResp); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+
+	if firstResp.Data.CommandID == "" {
+		t.Fatal("expected non-empty command_id")
+	}
+	if firstResp.Data.CommandID != secondResp.Data.CommandID {
+		t.Fatalf("expected original cached command_id, got %q vs %q", firstResp.Data.CommandID, secondResp.Data.CommandID)
+	}
+	if firstResp.Data.Output != secondResp.Data.Output {
+		t.Fatalf("expected original cached output, got %q vs %q", firstResp.Data.Output, secondResp.Data.Output)
+	}
+	if transport.CallCount() != 1 {
+		t.Fatalf("expected one transport send for same idempotency key, got %d", transport.CallCount())
+	}
+}

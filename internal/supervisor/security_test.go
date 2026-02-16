@@ -870,5 +870,150 @@ func TestAuditNoPlainSecret(t *testing.T) {
 	}
 }
 
+func TestAuditCredentialPushRedaction(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	audit := NewAuditLogger(db, zap.NewNop())
+
+	cmd := Command{
+		CommandID: "cmd-cred-push-redact",
+		Type:      CommandTypeCredentialPush,
+		Target:    CommandTarget{NodeID: "node-target-1"},
+		Args: map[string]interface{}{
+			"env_vars": map[string]interface{}{
+				"ANTHROPIC_API_KEY":     "sk-ant-secret-DO-NOT-LEAK",
+				"OPENAI_API_KEY":        "sk-openai-secret-DO-NOT-LEAK",
+				"DATABASE_PASSWORD":     "db-pass-DO-NOT-LEAK",
+				"AWS_SECRET_ACCESS_KEY": "aws-secret-DO-NOT-LEAK",
+			},
+			"version": 1,
+		},
+	}
+
+	result := &CommandResult{
+		CommandID: "cmd-cred-push-redact",
+		Status:    CommandStatusSuccess,
+		Timestamp: time.Now().UTC(),
+	}
+
+	audit.LogCommand(cmd, result, "api", "10.0.0.1", 150*time.Millisecond)
+
+	entries, err := audit.QueryByAction("credential_push", 10)
+	if err != nil {
+		t.Fatalf("QueryByAction: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	storedArgs := entries[0].Args
+
+	leaks := []string{
+		"sk-ant-secret-DO-NOT-LEAK",
+		"sk-openai-secret-DO-NOT-LEAK",
+		"db-pass-DO-NOT-LEAK",
+		"aws-secret-DO-NOT-LEAK",
+	}
+	for _, leak := range leaks {
+		if strings.Contains(storedArgs, leak) {
+			t.Errorf("audit args contain plaintext secret %q", leak)
+		}
+	}
+
+	if !strings.Contains(storedArgs, "[REDACTED]") {
+		t.Error("audit args should contain [REDACTED] markers")
+	}
+	if !strings.Contains(storedArgs, "env_vars") {
+		t.Error("env_vars key should be preserved in audit args")
+	}
+}
+
+func TestAuditCredentialPushMetadata(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	audit := NewAuditLogger(db, zap.NewNop())
+
+	cmd := Command{
+		CommandID: "cmd-cred-push-meta",
+		Type:      CommandTypeCredentialPush,
+		Target:    CommandTarget{NodeID: "node-push-target"},
+		Args: map[string]interface{}{
+			"env_vars": map[string]interface{}{
+				"API_KEY": "some-value",
+			},
+			"version": 2,
+		},
+	}
+
+	t.Run("success", func(t *testing.T) {
+		result := &CommandResult{
+			CommandID: "cmd-cred-push-meta",
+			Status:    CommandStatusSuccess,
+			Timestamp: time.Now().UTC(),
+		}
+
+		audit.LogCommand(cmd, result, "ops-admin", "192.168.1.100", 200*time.Millisecond)
+
+		entries, err := audit.QueryByAction("credential_push", 10)
+		if err != nil {
+			t.Fatalf("QueryByAction: %v", err)
+		}
+		if len(entries) == 0 {
+			t.Fatal("expected at least 1 audit entry")
+		}
+
+		entry := entries[0]
+		if entry.Action != "credential_push" {
+			t.Errorf("expected action credential_push, got %s", entry.Action)
+		}
+		if entry.Target != "node-push-target" {
+			t.Errorf("expected target node-push-target, got %s", entry.Target)
+		}
+		if entry.Result != "success" {
+			t.Errorf("expected result success, got %s", entry.Result)
+		}
+		if entry.Actor != "ops-admin" {
+			t.Errorf("expected actor ops-admin, got %s", entry.Actor)
+		}
+		if entry.IPAddress != "192.168.1.100" {
+			t.Errorf("expected IP 192.168.1.100, got %s", entry.IPAddress)
+		}
+		if entry.DurationMs != 200 {
+			t.Errorf("expected 200ms duration, got %d", entry.DurationMs)
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		failCmd := cmd
+		failCmd.CommandID = "cmd-cred-push-fail"
+
+		result := &CommandResult{
+			CommandID: "cmd-cred-push-fail",
+			Status:    CommandStatusFailure,
+			Error:     "node unreachable",
+			Timestamp: time.Now().UTC(),
+		}
+
+		audit.LogCommand(failCmd, result, "api", "10.0.0.5", 50*time.Millisecond)
+
+		entries, err := audit.QueryByActor("api", 10)
+		if err != nil {
+			t.Fatalf("QueryByActor: %v", err)
+		}
+
+		var found *AuditEntry
+		for i := range entries {
+			if entries[i].Result == "failure" && entries[i].Action == "credential_push" {
+				found = &entries[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("expected a failure audit entry for credential_push")
+		}
+		if found.Error != "node unreachable" {
+			t.Errorf("expected error 'node unreachable', got %s", found.Error)
+		}
+	})
+}
+
 // Suppress unused import warning — needed for sqlite driver registration.
 var _ = storage.NewMigrationRunner

@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"reflect"
 	"strings"
@@ -217,6 +218,76 @@ func TestRegistryNoSecretStore(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestReconnectCredentialReconciliation(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	registry := NewNodeRegistry(db, zap.NewNop())
+
+	if err := registry.Register(NodeEntry{ID: "node-reconnect", Hostname: "agent-host-reconnect"}); err != nil {
+		t.Fatalf("register node failed: %v", err)
+	}
+	if err := registry.MarkOffline("node-reconnect"); err != nil {
+		t.Fatalf("mark offline failed: %v", err)
+	}
+	if err := registry.Register(NodeEntry{ID: "node-reconnect", Hostname: "agent-host-reconnect"}); err != nil {
+		t.Fatalf("re-register node failed: %v", err)
+	}
+
+	nodeBefore, err := registry.GetNode("node-reconnect")
+	if err != nil {
+		t.Fatalf("get node before reconcile failed: %v", err)
+	}
+	if nodeBefore.CredSyncStatus != CredentialSyncStatusUnknown {
+		t.Fatalf("expected pre-report status unknown, got %s", nodeBefore.CredSyncStatus)
+	}
+
+	payload, err := json.Marshal(CredentialSyncPayload{NodeID: "node-reconnect", CredentialVersion: 1})
+	if err != nil {
+		t.Fatalf("marshal credential_sync payload: %v", err)
+	}
+	if err := registry.HandleCredentialSyncMessage(payload, 1); err != nil {
+		t.Fatalf("handle credential_sync failed: %v", err)
+	}
+
+	nodeAfter, err := registry.GetNode("node-reconnect")
+	if err != nil {
+		t.Fatalf("get node after reconcile failed: %v", err)
+	}
+	if nodeAfter.CredSyncStatus != CredentialSyncStatusInSync {
+		t.Fatalf("expected in_sync status, got %s", nodeAfter.CredSyncStatus)
+	}
+	if nodeAfter.CredVersion != 1 {
+		t.Fatalf("expected credential version 1, got %d", nodeAfter.CredVersion)
+	}
+}
+
+func TestReconnectCredentialDrift(t *testing.T) {
+	db := setupSupervisorTestDB(t)
+	registry := NewNodeRegistry(db, zap.NewNop())
+
+	if err := registry.Register(NodeEntry{ID: "node-drift", Hostname: "agent-host-drift"}); err != nil {
+		t.Fatalf("register node failed: %v", err)
+	}
+
+	payload, err := json.Marshal(CredentialSyncPayload{NodeID: "node-drift", CredentialVersion: 1})
+	if err != nil {
+		t.Fatalf("marshal credential_sync payload: %v", err)
+	}
+	if err := registry.HandleCredentialSyncMessage(payload, 2); err != nil {
+		t.Fatalf("handle credential_sync failed: %v", err)
+	}
+
+	node, err := registry.GetNode("node-drift")
+	if err != nil {
+		t.Fatalf("get node failed: %v", err)
+	}
+	if node.CredSyncStatus != CredentialSyncStatusDriftDetected {
+		t.Fatalf("expected drift_detected status, got %s", node.CredSyncStatus)
+	}
+	if node.CredVersion != 1 {
+		t.Fatalf("expected reported credential version 1, got %d", node.CredVersion)
 	}
 }
 

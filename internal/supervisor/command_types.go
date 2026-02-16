@@ -16,6 +16,7 @@ const (
 	CommandTypeRestartSession CommandType = "restart_session"
 	CommandTypeSessionStatus  CommandType = "session_status"
 	CommandTypeHandover       CommandType = "handover"
+	CommandTypeCredentialPush CommandType = "credential_push"
 )
 
 type CommandStatus string
@@ -68,6 +69,8 @@ func ParseCommandIntent(intent string) (CommandType, error) {
 		return CommandTypeSessionStatus, nil
 	case string(CommandTypeHandover), "/handover":
 		return CommandTypeHandover, nil
+	case string(CommandTypeCredentialPush), "push_credentials", "/push_credentials":
+		return CommandTypeCredentialPush, nil
 	default:
 		return "", fmt.Errorf("unsupported command intent %q", intent)
 	}
@@ -80,7 +83,8 @@ func IsSupportedCommandType(commandType CommandType) bool {
 		CommandTypeKillSession,
 		CommandTypeRestartSession,
 		CommandTypeSessionStatus,
-		CommandTypeHandover:
+		CommandTypeHandover,
+		CommandTypeCredentialPush:
 		return true
 	default:
 		return false

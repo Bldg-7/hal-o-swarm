@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
@@ -25,7 +26,14 @@ type HTTPAPI struct {
 	logger        *zap.Logger
 	healthChecker *HealthChecker
 	metrics       *Metrics
+	auditLogger   *AuditLogger
+
+	credentialIdempotencyMu    sync.Mutex
+	credentialIdempotencyCache map[string]*CommandResult
+	credentialIdempotencyOrder []string
 }
+
+const maxCredentialIdempotencyEntries = 1000
 
 func NewHTTPAPI(
 	registry *NodeRegistry,
@@ -39,13 +47,14 @@ func NewHTTPAPI(
 		logger = zap.NewNop()
 	}
 	return &HTTPAPI{
-		registry:   registry,
-		tracker:    tracker,
-		dispatcher: dispatcher,
-		db:         db,
-		authToken:  authToken,
-		logger:     logger,
-		metrics:    GetMetrics(),
+		registry:                   registry,
+		tracker:                    tracker,
+		dispatcher:                 dispatcher,
+		db:                         db,
+		authToken:                  authToken,
+		logger:                     logger,
+		metrics:                    GetMetrics(),
+		credentialIdempotencyCache: make(map[string]*CommandResult),
 	}
 }
 
@@ -64,6 +73,7 @@ func (a *HTTPAPI) Handler() http.Handler {
 	mux.Handle("GET /api/v1/events", a.requireAuth(http.HandlerFunc(a.handleListEvents)))
 	mux.Handle("GET /api/v1/cost", a.requireAuth(http.HandlerFunc(a.handleCostReport)))
 	mux.Handle("POST /api/v1/commands", a.requireAuth(http.HandlerFunc(a.handleCommand)))
+	mux.Handle("POST /api/v1/commands/credentials/push", a.requireAuth(http.HandlerFunc(a.handleCredentialPush)))
 
 	return mux
 }
@@ -74,6 +84,10 @@ func (a *HTTPAPI) SetCostAggregator(aggregator *CostAggregator) {
 
 func (a *HTTPAPI) SetHealthChecker(hc *HealthChecker) {
 	a.healthChecker = hc
+}
+
+func (a *HTTPAPI) SetAuditLogger(al *AuditLogger) {
+	a.auditLogger = al
 }
 
 type apiResponse struct {
@@ -464,6 +478,134 @@ func (a *HTTPAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
 			Timestamp: result.Timestamp,
 		},
 	})
+}
+
+func (a *HTTPAPI) handleCredentialPush(w http.ResponseWriter, r *http.Request) {
+	if a.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "command dispatcher unavailable", "SERVICE_UNAVAILABLE")
+		return
+	}
+
+	var req struct {
+		TargetNode     string            `json:"target_node"`
+		EnvVars        map[string]string `json:"env_vars"`
+		Version        int               `json:"version"`
+		IdempotencyKey string            `json:"idempotency_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body", "BAD_REQUEST")
+		return
+	}
+
+	payload := shared.CredentialPushPayload{
+		TargetNode: req.TargetNode,
+		EnvVars:    req.EnvVars,
+		Version:    req.Version,
+	}
+
+	if err := payload.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
+		return
+	}
+
+	// Convert env vars to map[string]interface{} so SanitizeArgs can
+	// recursively traverse and redact secret-named keys in audit logs.
+	envVarsMap := make(map[string]interface{}, len(payload.EnvVars))
+	for k, v := range payload.EnvVars {
+		envVarsMap[k] = v
+	}
+
+	cmd := Command{
+		Type:           CommandTypeCredentialPush,
+		IdempotencyKey: req.IdempotencyKey,
+		Target:         CommandTarget{NodeID: payload.TargetNode},
+		Args: map[string]interface{}{
+			"env_vars": envVarsMap,
+			"version":  payload.Version,
+		},
+	}
+
+	ctx := r.Context()
+	ctx, cancel := context.WithTimeout(ctx, cmd.EffectiveTimeout()+5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	result, ok := a.credentialPushIdempotencyGet(req.IdempotencyKey)
+	var err error
+	if !ok {
+		result, err = a.dispatcher.DispatchCommand(ctx, cmd)
+		if err == nil {
+			a.credentialPushIdempotencySet(req.IdempotencyKey, result)
+		}
+	}
+	elapsed := time.Since(start)
+
+	// Audit the credential push command regardless of outcome
+	if a.auditLogger != nil {
+		a.auditLogger.LogCommand(cmd, result, "api", r.RemoteAddr, elapsed)
+	}
+
+	if err != nil {
+		a.logger.Error("credential push dispatch failed", zap.Error(err))
+		if a.metrics != nil {
+			a.metrics.RecordCommand(string(CommandTypeCredentialPush), "error")
+			a.metrics.RecordError("dispatcher", "dispatch_failed")
+		}
+		writeError(w, http.StatusInternalServerError, "command dispatch failed", "DISPATCH_ERROR")
+		return
+	}
+
+	if a.metrics != nil {
+		a.metrics.RecordCommand(string(CommandTypeCredentialPush), string(result.Status))
+		a.metrics.RecordCommandDuration(string(CommandTypeCredentialPush), elapsed.Seconds())
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{
+		Data: commandResultJSON{
+			CommandID: result.CommandID,
+			Status:    result.Status,
+			Output:    result.Output,
+			Error:     result.Error,
+			Timestamp: result.Timestamp,
+		},
+	})
+}
+
+func (a *HTTPAPI) credentialPushIdempotencyGet(key string) (*CommandResult, bool) {
+	if key == "" {
+		return nil, false
+	}
+
+	a.credentialIdempotencyMu.Lock()
+	defer a.credentialIdempotencyMu.Unlock()
+
+	result, ok := a.credentialIdempotencyCache[key]
+	if !ok || result == nil {
+		return nil, false
+	}
+
+	copy := *result
+	return &copy, true
+}
+
+func (a *HTTPAPI) credentialPushIdempotencySet(key string, result *CommandResult) {
+	if key == "" || result == nil {
+		return
+	}
+
+	a.credentialIdempotencyMu.Lock()
+	defer a.credentialIdempotencyMu.Unlock()
+
+	resultCopy := *result
+	if _, exists := a.credentialIdempotencyCache[key]; !exists {
+		a.credentialIdempotencyOrder = append(a.credentialIdempotencyOrder, key)
+		if len(a.credentialIdempotencyOrder) > maxCredentialIdempotencyEntries {
+			evicted := a.credentialIdempotencyOrder[0]
+			a.credentialIdempotencyOrder = a.credentialIdempotencyOrder[1:]
+			delete(a.credentialIdempotencyCache, evicted)
+		}
+	}
+	a.credentialIdempotencyCache[key] = &resultCopy
 }
 
 func (a *HTTPAPI) handleCostReport(w http.ResponseWriter, r *http.Request) {

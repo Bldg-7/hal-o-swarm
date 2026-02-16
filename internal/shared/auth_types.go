@@ -1,6 +1,10 @@
 package shared
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // ToolIdentifier represents the identifier of a tool that requires authentication.
 type ToolIdentifier string
@@ -35,4 +39,20 @@ type CredentialPushPayload struct {
 	TargetNode string            `json:"target_node"`
 	EnvVars    map[string]string `json:"env_vars"`
 	Version    int               `json:"version"`
+}
+
+func (p CredentialPushPayload) Validate() error {
+	if strings.TrimSpace(p.TargetNode) == "" {
+		return fmt.Errorf("validation error: credential_push.target_node must not be empty")
+	}
+	if len(p.EnvVars) == 0 {
+		return fmt.Errorf("validation error: credential_push.env_vars must not be empty")
+	}
+	for key, value := range p.EnvVars {
+		if value == "" {
+			return fmt.Errorf("validation error: credential_push.env_vars.%s must not be empty", key)
+		}
+	}
+
+	return nil
 }

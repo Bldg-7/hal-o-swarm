@@ -73,6 +73,11 @@ func (c *AgentConn) readPump() {
 			c.mu.Lock()
 			c.lastHeartbeat = time.Now()
 			c.mu.Unlock()
+			continue
+		}
+
+		if env.Type == string(shared.MessageTypeCredentialSync) {
+			c.hub.reconcileCredentialSync(env.Payload)
 		}
 	}
 }

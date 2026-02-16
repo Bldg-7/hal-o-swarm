@@ -64,6 +64,7 @@ type WSClient struct {
 
 	snapshotProvider SnapshotProvider
 	messageHandler   MessageHandler
+	onConnectHooks   []func() error
 
 	commandHandlers map[string]CommandHandler
 	commandMu       sync.RWMutex
@@ -95,6 +96,14 @@ func WithSnapshotProvider(sp SnapshotProvider) WSClientOption {
 // WithMessageHandler sets the handler for incoming supervisor messages.
 func WithMessageHandler(mh MessageHandler) WSClientOption {
 	return func(c *WSClient) { c.messageHandler = mh }
+}
+
+func WithOnConnectHook(hook func() error) WSClientOption {
+	return func(c *WSClient) {
+		if hook != nil {
+			c.onConnectHooks = append(c.onConnectHooks, hook)
+		}
+	}
 }
 
 // WithBackoff overrides the default backoff configuration.
@@ -195,7 +204,21 @@ func (c *WSClient) dialAndServe(ctx context.Context) error {
 		return fmt.Errorf("resend events: %w", err)
 	}
 
+	if err := c.runOnConnectHooks(); err != nil {
+		c.closeConn()
+		return fmt.Errorf("run on-connect hooks: %w", err)
+	}
+
 	return c.readLoop(ctx)
+}
+
+func (c *WSClient) runOnConnectHooks() error {
+	for _, hook := range c.onConnectHooks {
+		if err := hook(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *WSClient) readLoop(ctx context.Context) error {

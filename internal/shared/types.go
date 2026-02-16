@@ -17,10 +17,11 @@ var (
 type MessageType string
 
 const (
-	MessageTypeEvent        MessageType = "event"
-	MessageTypeCommand      MessageType = "command"
-	MessageTypeHeartbeat    MessageType = "heartbeat"
-	MessageTypeRegister     MessageType = "register"
-	MessageTypeAuthState    MessageType = "auth_state"
-	MessageTypeConfigUpdate MessageType = "config_update"
+	MessageTypeEvent          MessageType = "event"
+	MessageTypeCommand        MessageType = "command"
+	MessageTypeHeartbeat      MessageType = "heartbeat"
+	MessageTypeRegister       MessageType = "register"
+	MessageTypeCredentialSync MessageType = "credential_sync"
+	MessageTypeAuthState      MessageType = "auth_state"
+	MessageTypeConfigUpdate   MessageType = "config_update"
 )

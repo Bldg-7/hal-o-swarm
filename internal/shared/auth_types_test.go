@@ -138,6 +138,139 @@ func TestCredentialPushPayloadJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCredentialPushEnvelopeRoundTrip(t *testing.T) {
+	payload := CredentialPushPayload{
+		TargetNode: "node-1",
+		EnvVars: map[string]string{
+			"ANTHROPIC_API_KEY": "sk-test-123",
+		},
+		Version: 1,
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+
+	env := &Envelope{
+		Version:   ProtocolVersion,
+		Type:      string(MessageTypeConfigUpdate),
+		RequestID: "req-credential-push-1",
+		Timestamp: time.Now().Unix(),
+		Payload:   payloadJSON,
+	}
+
+	envJSON, err := MarshalEnvelope(env)
+	if err != nil {
+		t.Fatalf("failed to marshal envelope: %v", err)
+	}
+
+	unmarshaledEnv, err := UnmarshalEnvelope(envJSON)
+	if err != nil {
+		t.Fatalf("failed to unmarshal envelope: %v", err)
+	}
+
+	if unmarshaledEnv.Version != env.Version {
+		t.Errorf("envelope version mismatch: got %d, want %d", unmarshaledEnv.Version, env.Version)
+	}
+	if unmarshaledEnv.Type != env.Type {
+		t.Errorf("envelope type mismatch: got %q, want %q", unmarshaledEnv.Type, env.Type)
+	}
+	if unmarshaledEnv.RequestID != env.RequestID {
+		t.Errorf("envelope request_id mismatch: got %q, want %q", unmarshaledEnv.RequestID, env.RequestID)
+	}
+	if unmarshaledEnv.Timestamp != env.Timestamp {
+		t.Errorf("envelope timestamp mismatch: got %d, want %d", unmarshaledEnv.Timestamp, env.Timestamp)
+	}
+
+	var unmarshaledPayload CredentialPushPayload
+	if err := json.Unmarshal(unmarshaledEnv.Payload, &unmarshaledPayload); err != nil {
+		t.Fatalf("failed to unmarshal credential push payload: %v", err)
+	}
+
+	if unmarshaledPayload.TargetNode != payload.TargetNode {
+		t.Errorf("target_node mismatch: got %q, want %q", unmarshaledPayload.TargetNode, payload.TargetNode)
+	}
+	if unmarshaledPayload.Version != payload.Version {
+		t.Errorf("version mismatch: got %d, want %d", unmarshaledPayload.Version, payload.Version)
+	}
+	if !reflect.DeepEqual(unmarshaledPayload.EnvVars, payload.EnvVars) {
+		t.Errorf("env_vars mismatch: got %#v, want %#v", unmarshaledPayload.EnvVars, payload.EnvVars)
+	}
+}
+
+func TestCredentialPushRejectsInvalidPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload CredentialPushPayload
+		wantErr bool
+	}{
+		{
+			name: "empty target node",
+			payload: CredentialPushPayload{
+				TargetNode: "",
+				EnvVars: map[string]string{
+					"ANTHROPIC_API_KEY": "sk-test-123",
+				},
+				Version: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil env vars",
+			payload: CredentialPushPayload{
+				TargetNode: "node-1",
+				EnvVars:    nil,
+				Version:    1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty env vars map",
+			payload: CredentialPushPayload{
+				TargetNode: "node-1",
+				EnvVars:    map[string]string{},
+				Version:    1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty env var value",
+			payload: CredentialPushPayload{
+				TargetNode: "node-1",
+				EnvVars: map[string]string{
+					"ANTHROPIC_API_KEY": "",
+				},
+				Version: 1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid payload",
+			payload: CredentialPushPayload{
+				TargetNode: "node-1",
+				EnvVars: map[string]string{
+					"ANTHROPIC_API_KEY": "sk-test-123",
+				},
+				Version: 1,
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.payload.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("expected no validation error, got %v", err)
+			}
+		})
+	}
+}
+
 // TestAuthStatusNoSecretField verifies that AuthStateReport has no secret-like fields.
 func TestAuthStatusNoSecretField(t *testing.T) {
 	forbiddenFields := map[string]bool{
