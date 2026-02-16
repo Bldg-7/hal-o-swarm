@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "requirements": [
+    {
+      "name": "go",
+      "version": "1.21"
+    },
+    {
+      "name": "git",
+      "version": "2.40"
+    },
+    {
+      "name": "docker",
+      "version": "24.0"
+    }
+  ]
+}

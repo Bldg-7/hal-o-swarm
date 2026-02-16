@@ -1,0 +1,15 @@
+{
+  "supervisor_url": "ws://192.168.10.x:8420",
+  "auth_token": "your-shared-secret-here",
+  "opencode_port": 4096,
+  "projects": [
+    {
+      "name": "ai-os-interfaces",
+      "directory": "/home/user/ai-os-interfaces"
+    },
+    {
+      "name": "ai-os-l0",
+      "directory": "/home/user/ai-os-l0"
+    }
+  ]
+}

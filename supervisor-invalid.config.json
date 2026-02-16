@@ -1,0 +1,43 @@
+{
+  "server": {
+    "port": 8080,
+    "auth_token": "",
+    "heartbeat_interval_sec": 30,
+    "heartbeat_timeout_count": 3
+  },
+  "channels": {
+    "discord": {
+      "bot_token": "discord-bot-token",
+      "guild_id": "123456789",
+      "channels": {
+        "alerts": "alerts-channel-id",
+        "dev-log": "dev-log-channel-id",
+        "build-log": "build-log-channel-id"
+      }
+    },
+    "slack": {
+      "bot_token": "slack-bot-token",
+      "channels": {
+        "alerts": "alerts-channel-id",
+        "dev-log": "dev-log-channel-id"
+      }
+    },
+    "n8n": {
+      "webhook_url": "https://n8n.example.com/webhook"
+    }
+  },
+  "cost": {
+    "poll_interval_minutes": 60,
+    "providers": {
+      "anthropic": {
+        "admin_api_key": "anthropic-admin-key"
+      },
+      "openai": {
+        "org_api_key": "openai-org-key"
+      }
+    }
+  },
+  "routes": [],
+  "auto_intervention": null,
+  "dependencies": null
+}

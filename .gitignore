@@ -1,0 +1,40 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Sisyphus evidence and working directories
+.sisyphus/evidence/
+.sisyphus/working/
+
+# Local configuration files (use .example versions)
+supervisor.config.json
+agent.config.json
+env-manifest.json
+
+# Build artifacts
+/bin/
+/dist/

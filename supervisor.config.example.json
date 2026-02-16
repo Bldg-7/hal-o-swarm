@@ -1,0 +1,43 @@
+{
+  "server": {
+    "port": 8420,
+    "auth_token": "your-shared-secret-here",
+    "heartbeat_interval_sec": 30,
+    "heartbeat_timeout_count": 3
+  },
+  "channels": {
+    "discord": {
+      "bot_token": "your-discord-bot-token",
+      "guild_id": "your-guild-id",
+      "channels": {
+        "alerts": "channel-id-for-alerts",
+        "dev-log": "channel-id-for-dev-log",
+        "build-log": "channel-id-for-build-log"
+      }
+    },
+    "slack": {
+      "bot_token": "xoxb-your-slack-bot-token",
+      "channels": {
+        "alerts": "C0123456789",
+        "dev-log": "C0123456789"
+      }
+    },
+    "n8n": {
+      "webhook_url": "https://n8n.local/webhook/hal-o-swarm"
+    }
+  },
+  "cost": {
+    "poll_interval_minutes": 60,
+    "providers": {
+      "anthropic": {
+        "admin_api_key": "your-anthropic-admin-api-key"
+      },
+      "openai": {
+        "org_api_key": "your-openai-org-api-key"
+      }
+    }
+  },
+  "routes": [],
+  "auto_intervention": {},
+  "dependencies": {}
+}
