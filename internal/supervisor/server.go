@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
 	"go.uber.org/zap"
@@ -14,11 +16,15 @@ import (
 type Server struct {
 	cfg     *config.SupervisorConfig
 	logger  *zap.Logger
+	hub     *Hub
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	mu      sync.Mutex
 	running bool
+
+	httpAPI      *HTTPAPI
+	httpShutdown func(ctx context.Context) error
 }
 
 // NewServer creates a new supervisor server instance.
@@ -27,6 +33,14 @@ func NewServer(cfg *config.SupervisorConfig, logger *zap.Logger) *Server {
 	return &Server{
 		cfg:    cfg,
 		logger: logger,
+		hub: NewHub(
+			ctx,
+			cfg.Server.AuthToken,
+			cfg.Server.AllowedOrigins,
+			time.Duration(cfg.Server.HeartbeatIntervalSec)*time.Second,
+			cfg.Server.HeartbeatTimeoutCount,
+			logger,
+		),
 		ctx:    ctx,
 		cancel: cancel,
 	}
@@ -63,9 +77,34 @@ func (s *Server) Start() error {
 		zap.Int("port", s.cfg.Server.Port),
 	)
 
-	// Start background maintenance goroutine
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.hub.Run()
+	}()
+
 	s.wg.Add(1)
 	go s.maintenanceLoop()
+
+	if s.httpAPI != nil && s.cfg.Server.HTTPPort > 0 {
+		addr := fmt.Sprintf(":%d", s.cfg.Server.HTTPPort)
+		httpSrv := &http.Server{
+			Addr:         addr,
+			Handler:      s.httpAPI.Handler(),
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.logger.Info("http api server starting", zap.String("addr", addr))
+			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				s.logger.Error("http api server error", zap.Error(err))
+			}
+		}()
+		s.httpShutdown = httpSrv.Shutdown
+	}
 
 	return nil
 }
@@ -82,7 +121,14 @@ func (s *Server) Stop() error {
 
 	s.logger.Info("supervisor shutting down gracefully")
 
-	// Signal all goroutines to stop
+	if s.httpShutdown != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.httpShutdown(shutdownCtx); err != nil {
+			s.logger.Error("http api shutdown error", zap.Error(err))
+		}
+		shutdownCancel()
+	}
+
 	s.cancel()
 
 	// Wait for all goroutines to finish with timeout
@@ -128,4 +174,12 @@ func (s *Server) IsRunning() bool {
 // Context returns the server's context for cancellation propagation.
 func (s *Server) Context() context.Context {
 	return s.ctx
+}
+
+func (s *Server) Hub() *Hub {
+	return s.hub
+}
+
+func (s *Server) SetHTTPAPI(api *HTTPAPI) {
+	s.httpAPI = api
 }

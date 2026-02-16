@@ -240,3 +240,100 @@ Adapter error mapping standardizes retries and terminal failures:
 - Missing sessions (404) -> `ErrSessionNotFound`
 
 This gives caller-side policy control without leaking SDK-specific error handling.
+
+## T15: Dependency Graph Parser & Manual Trigger
+
+### Decision: DAG Validation on Load
+
+**Rationale**: The dependency graph is validated for cycles at construction time, not at query time.
+- `NewDependencyGraph()` performs DFS cycle detection before returning
+- Invalid graphs (with cycles) are rejected immediately with clear error messages
+- Cycle path is included in error: "cycle detected: A -> B -> C -> A"
+- This fail-fast approach prevents silent failures and makes debugging easier
+
+### Decision: Dual Graph Representation
+
+**Rationale**: Both forward and reverse graphs are maintained for efficient queries.
+- `graph[project]` → list of dependencies (what project depends on)
+- `reverseGraph[project]` → list of dependents (what depends on this project)
+- Enables O(1) lookup for both directions without recomputation
+- Reverse graph built during construction, not on-demand
+
+### Decision: Manual Trigger Only (v1.0)
+
+**Rationale**: `TriggerDependents()` returns a list of ready projects but does NOT auto-start them.
+- Caller is responsible for deciding when to start dependent projects
+- Enables flexible scheduling policies (manual, milestone-based, time-based)
+- Future versions can add automatic triggers via separate mechanism
+- Simplifies v1.0 implementation and testing
+
+### Decision: Completion Status via SessionTracker
+
+**Rationale**: Project completion is determined by checking if any non-error session exists.
+- `IsReady(project, tracker)` queries tracker for sessions of that project
+- A project is "complete" if it has at least one session that is not in error/unreachable state
+- This allows multiple sessions per project (e.g., retries, parallel runs)
+- Future versions can add explicit completion markers (e.g., PROGRESS.md status)
+
+### Implementation Details
+
+**DependencyGraph Type**:
+- `graph map[string][]string`: adjacency list (project → dependencies)
+- `reverseGraph map[string][]string`: reverse adjacency list (project → dependents)
+- `allProjects map[string]bool`: tracks all projects in graph
+
+**Cycle Detection Algorithm**:
+- DFS with visited/inStack tracking
+- On cycle detection, collects path from cycle start to cycle end
+- Returns error with formatted path: "cycle detected: A -> B -> C -> A"
+
+**Query APIs**:
+- `GetDependencies(project)`: returns direct dependencies (copy to prevent mutation)
+- `GetDependents(project)`: returns projects that depend on this one (copy to prevent mutation)
+- `IsReady(project, tracker)`: checks if all dependencies have completed sessions
+- `TriggerDependents(project, tracker)`: returns list of dependents ready to start
+
+**SessionTracker Integration**:
+- Added `GetSessionsByProject(project)` method to query sessions by project name
+- Returns all sessions for a given project (may be multiple if retries/parallel)
+- Used by `IsReady()` to check completion status
+
+### Testing Coverage
+
+**Happy Path**:
+- Valid graph loads without error
+- Query APIs return correct results
+- TriggerDependents returns ready projects when all dependencies complete
+- Partial completion: TriggerDependents returns empty list if only some dependencies complete
+
+**Error Path**:
+- Simple cycle (A → B → A) rejected with cycle path
+- Complex cycle (A → B → C → A) rejected with cycle path
+- Empty project name to TriggerDependents returns error
+
+**Edge Cases**:
+- Empty config creates valid empty graph
+- Project with no dependencies is always ready
+- Project with no dependents returns empty list from TriggerDependents
+
+## T11: Command Dispatcher Pattern
+
+### Decision: Canonical command contract + intent normalization
+
+`Command` now carries `command_id`, `type`, `idempotency_key`, `target`, `args`, and `timeout`; dispatcher accepts aliases/slash-intents and normalizes to six canonical types (`create_session`, `prompt_session`, `kill_session`, `restart_session`, `session_status`, `handover`). Missing `command_id` is auto-assigned as UUID and provided IDs are UUID-validated.
+
+### Decision: Idempotency key scope = key + canonical payload hash
+
+Idempotency hash is `SHA256(idempotency_key + canonical_payload)` where canonical payload includes normalized type, target, args, and effective timeout. Dispatcher checks `command_idempotency` before execution and returns cached `CommandResult` on hit. New executions are cached with `expires_at = now + 24h`.
+
+### Decision: Fail-fast target resolution with deterministic failure payloads
+
+Dispatch resolves target node through T8 state (`SessionTracker` project mapping first, then `NodeRegistry` project metadata fallback). Offline/missing targets do not execute and return deterministic `CommandResult{status: failure, error: ...}`.
+
+### Decision: Directed COMMAND send + blocking result wait
+
+Dispatcher sends `shared.MessageTypeCommand` envelopes to a specific node connection (request_id = command_id), then blocks on `waitForResult` until `COMMAND_RESULT` arrives or timeout is reached. Default timeout is 30s; `handover` defaults to 60s. Timeout returns `CommandResult{status: timeout}` (no fire-and-forget path).
+
+### Decision: Pending result correlation map
+
+In-flight commands are tracked in a `pending[command_id]` channel map. `HandleCommandResult`/`HandleCommandResultEnvelope` completes the matching waiter, enabling deterministic request/response correlation.

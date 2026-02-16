@@ -1,6 +1,7 @@
 {
   "server": {
     "port": 8420,
+    "http_port": 8421,
     "auth_token": "your-shared-secret-here",
     "heartbeat_interval_sec": 30,
     "heartbeat_timeout_count": 3
@@ -38,6 +39,26 @@
     }
   },
   "routes": [],
-  "auto_intervention": {},
+  "policies": {
+    "resume_on_idle": {
+      "enabled": true,
+      "idle_threshold_seconds": 300,
+      "max_retries": 3,
+      "retry_reset_seconds": 3600
+    },
+    "restart_on_compaction": {
+      "enabled": true,
+      "token_threshold": 180000,
+      "max_retries": 2,
+      "retry_reset_seconds": 3600
+    },
+    "kill_on_cost": {
+      "enabled": false,
+      "cost_threshold_usd": 10.0,
+      "max_retries": 1,
+      "retry_reset_seconds": 86400
+    },
+    "check_interval_seconds": 30
+  },
   "dependencies": {}
 }

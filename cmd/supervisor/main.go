@@ -37,34 +37,61 @@ func main() {
 		zap.String("config_path", *configPath),
 	)
 
-	// Create and start server
 	srv := supervisor.NewServer(cfg, logger)
+
+	if cfg.Server.HTTPPort > 0 {
+		api := supervisor.NewHTTPAPI(nil, nil, nil, nil, cfg.Server.AuthToken, logger)
+		srv.SetHTTPAPI(api)
+		logger.Info("http api configured", zap.Int("http_port", cfg.Server.HTTPPort))
+	}
+
 	if err := srv.Start(); err != nil {
 		logger.Error("failed to start server", zap.Error(err))
 		os.Exit(1)
 	}
 
-	// Set up signal handling for graceful shutdown
+	var discordBot *supervisor.DiscordBot
+	if token := cfg.Channels.Discord.BotToken; token != "" {
+		bot, botErr := supervisor.NewDiscordBot(
+			token,
+			cfg.Channels.Discord.GuildID,
+			nil,
+			srv.Hub(),
+			nil,
+			logger,
+		)
+		if botErr != nil {
+			logger.Error("failed to create discord bot", zap.Error(botErr))
+		} else if startErr := bot.Start(); startErr != nil {
+			logger.Error("failed to start discord bot", zap.Error(startErr))
+		} else {
+			discordBot = bot
+			logger.Info("discord bot started")
+		}
+	}
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
-	// Wait for shutdown signal
 	sig := <-sigChan
 	logger.Info("received signal, initiating graceful shutdown",
 		zap.String("signal", sig.String()),
 	)
 
-	// Graceful shutdown with context
+	if discordBot != nil {
+		if stopErr := discordBot.Stop(); stopErr != nil {
+			logger.Error("error stopping discord bot", zap.Error(stopErr))
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 0)
 	defer cancel()
 
-	// Stop the server
 	if err := srv.Stop(); err != nil {
 		logger.Error("error during shutdown", zap.Error(err))
 		os.Exit(1)
 	}
 
-	// Ensure context is done
 	<-ctx.Done()
 
 	logger.Info("supervisor exited cleanly")

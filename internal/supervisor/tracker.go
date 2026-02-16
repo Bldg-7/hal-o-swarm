@@ -226,6 +226,19 @@ func (t *SessionTracker) GetAllSessions() []TrackedSession {
 	return out
 }
 
+func (t *SessionTracker) GetSessionsByProject(project string) []TrackedSession {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	out := make([]TrackedSession, 0)
+	for _, session := range t.sessions {
+		if session.Project == project {
+			out = append(out, session)
+		}
+	}
+	return out
+}
+
 func (t *SessionTracker) MarkUnreachable(nodeID string) error {
 	if _, err := t.db.Exec(`UPDATE sessions SET status = ? WHERE node_id = ?`, string(SessionStatusUnreachable), nodeID); err != nil {
 		return fmt.Errorf("mark sessions unreachable for node %s: %w", nodeID, err)

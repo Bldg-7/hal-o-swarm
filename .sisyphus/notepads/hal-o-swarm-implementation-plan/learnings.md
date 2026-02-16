@@ -167,3 +167,147 @@ _(To be populated as implementation progresses)_
 - Port 1 (127.0.0.1:1) for unreachable server tests
 - Fast backoff (10ms min, 100ms max) for test speed
 - atomic.Int32 for thread-safe counters in test assertions
+
+## WebSocket Hub Implementation Patterns (T6)
+
+### Gorilla Hub Pattern
+- Central Hub struct with register/unregister/broadcast channels
+- Single Run() goroutine processes all channel operations (no concurrent map access)
+- sync.RWMutex protects clients map for concurrent reads (ClientCount) while Run() holds write lock
+- Non-blocking broadcast: `select { case conn.send <- msg: default: close(conn.send); delete(...) }`
+
+### Auth During WebSocket Upgrade
+- Check Authorization header (Bearer token) OR query param (?token=) BEFORE calling upgrader.Upgrade
+- Return http.Error(w, "Unauthorized", 401) for invalid/missing token — gorilla Dialer receives this as resp.StatusCode
+- Origin validation via upgrader.CheckOrigin callback — gorilla returns 403 automatically on rejection
+
+### Ping/Pong Protocol Constants
+- writeWait: 10s (deadline for all writes)
+- pongWait: 60s (read deadline, extended on each pong)
+- pingPeriod: 54s (90% of pongWait — ensures ping arrives before read deadline expires)
+- maxMessageSize: 64KB
+
+### Heartbeat vs Ping/Pong (Two Separate Mechanisms)
+- Ping/pong: WebSocket-level connection liveness (handled by gorilla)
+- Application heartbeat: Agent sends Envelope{type:"heartbeat"} every 30s
+- Hub checks every heartbeatInterval; if time.Since(lastHeartbeat) > interval * timeoutCount → node.offline event + close
+
+### Connection Lifecycle Safety
+- readPump defers: `select { case hub.unregister <- c: case <-hub.ctx.Done(): }` — prevents goroutine leak on shutdown
+- writePump detects closed send channel (ok=false) → sends CloseMessage → exits
+- Hub.Run ctx.Done case closes all connections and returns
+- conn.conn.Close() is idempotent (net.Conn.Close on already-closed returns error, no panic)
+
+### Testing WebSocket with httptest
+- httptest.NewServer + http.ServeMux for test server
+- websocket.DefaultDialer.Dial returns (*Conn, *http.Response, error)
+- On auth failure: resp.StatusCode == 401, err != nil
+- On origin failure: resp.StatusCode == 403, err != nil
+- Short heartbeat intervals (50ms) for fast timeout tests
+- Always drain Events() channel between assertions to avoid blocking
+
+## T14: Auto-Intervention Policy Engine
+
+### Retry Ceiling Pattern
+- Keep retry counters in `map[sessionID]map[policyName]retryState` guarded by mutex.
+- Gate each intervention with `count >= maxRetries` and `lastAttempt + retryResetWindow` to prevent infinite loops.
+- Reset retry counter on successful action so transient failures do not permanently block future interventions.
+
+### Action Routing Pattern
+- Read candidate sessions from `SessionTracker.GetAllSessions()` only; do not mutate tracker state directly.
+- Execute interventions exclusively through `CommandDispatcher.DispatchCommand()` with canonical command types (`prompt_session`, `restart_session`, `kill_session`).
+- Include `session_id` and `policy` in command args for traceability of automated interventions.
+
+### Policy Event Pattern
+- Emit `policy.action` for every attempt outcome (`success`/`failure`) with retry count.
+- Emit `policy.alert` and `policy.retry_cap` when a session hits max retries.
+- Route policy events through T9 `EventPipeline.ProcessEvent()` with monotonic local sequence IDs.
+
+### Graceful Shutdown Pattern
+- Drive periodic checks with `time.NewTicker` inside a goroutine that exits on `ctx.Done()`.
+- `Stop()` cancels context and waits briefly for the worker, so supervisor shutdown is not blocked by policy checks.
+
+## T12: Discord Slash Command Integration
+
+### DiscordSession Interface Pattern
+- Abstract `*discordgo.Session` behind an interface (`DiscordSession`) with only the methods used: `AddHandler`, `Open`, `Close`, `ApplicationCommandCreate`, `ApplicationCommandDelete`, `InteractionRespond`, `FollowupMessageCreate`, `State`.
+- `realDiscordSession` wraps the concrete session; tests inject `mockDiscordSession`.
+- This avoids needing a real Discord token or network for unit tests.
+
+### Deferred Response Flow (3s Timeout)
+- On `InteractionCreate`, immediately call `InteractionRespond` with `InteractionResponseDeferredChannelMessageWithSource`.
+- Execute command (dispatcher or direct query) synchronously after acknowledging.
+- Send result as `FollowupMessageCreate` with embed payload.
+- This pattern ensures Discord never times out the interaction.
+
+### Command Routing Strategy
+- Commands that modify state (`/start`, `/kill`, `/restart`, `/resume`, `/inject`, `/status`) go through `CommandDispatcher.DispatchCommand()`.
+- Direct-query commands (`/nodes`, `/logs`, `/cost`) read from Hub, SessionTracker, or aggregate data directly.
+- Session-targeted commands (`/inject`, `/restart`, `/kill`) resolve session → node via `SessionTracker.GetSession()` before dispatching.
+
+### Error Sanitization
+- All `CommandResult.Error` strings pass through `sanitizeError()` which maps known internal patterns to user-safe messages.
+- Patterns: "not connected" → "Target node is not connected.", "offline" → "Target node is offline.", "timed out" → "The command timed out."
+- Unknown errors get generic fallback: "An error occurred while processing the command."
+- Never expose node IDs, file paths, or stack traces to Discord users.
+
+### Embed Color Convention
+- Success (0x00CC66): green for successful commands.
+- Failure (0xCC3333): red for command failures and validation errors.
+- Timeout (0xFF9900): orange for timed-out commands.
+- Info (0x3399FF): blue for informational queries (/nodes, /logs, /cost).
+
+### Testing Discord Bots Without API
+- `mockDiscordSession` captures all `InteractionRespond` and `FollowupMessageCreate` calls.
+- `simulateInteraction()` helper constructs `InteractionCreate` events with typed options.
+- `discordgo.State` requires setting `User` via the embedded `Ready` struct: `s.User = &discordgo.User{ID: "..."}` (not struct literal).
+- Reuse `mockCommandTransport` from T11 tests; async `HandleCommandResult` with short sleep simulates real dispatch.
+
+### Config Wiring
+- Config already had `channels.discord.bot_token` and `channels.discord.guild_id` fields.
+- Discord bot lifecycle: create in `main()` if token is non-empty, `Start()` after server, `Stop()` before server during shutdown.
+- Non-fatal: if bot creation or start fails, log error but don't crash the supervisor.
+
+## T13: Supervisor HTTP API
+
+### Go 1.22+ ServeMux Routing
+- `net/http.ServeMux` supports method+path patterns: `"GET /api/v1/sessions/{id}"`.
+- Path parameters via `r.PathValue("id")` — no external router dependency needed.
+- Register patterns on a sub-mux, then mount under versioned prefix with `http.StripPrefix`.
+
+### Bearer Token Auth Middleware
+- Reuse same `cfg.Server.AuthToken` as WebSocket hub auth.
+- Middleware wraps `http.Handler`; checks `Authorization: Bearer <token>` header.
+- `/api/v1/health` excluded from auth (registered outside middleware wrapper).
+- Return `401 Unauthorized` with JSON error envelope on failure.
+
+### Consistent JSON Response Envelopes
+- Success: `{"data": ..., "meta": {"count": N}}` with `200 OK`.
+- Error: `{"error": "message", "code": N}` with appropriate HTTP status.
+- Always set `Content-Type: application/json` via middleware, even on errors.
+
+### Read-Only Queries + Command Dispatch
+- All GET endpoints query SQLite directly (sessions, nodes, events tables).
+- All mutations go through `POST /api/v1/commands` → `CommandDispatcher.DispatchCommand()` (T11).
+- If dispatcher is nil (not configured), return `503 Service Unavailable`.
+
+### Query Filtering Pattern
+- Sessions: `?project=`, `?status=`, `?node_id=`, `?limit=` with dynamic WHERE clause building.
+- Events: `?session_id=`, `?type=`, `?since=` (RFC3339), `?limit=` with same pattern.
+- Default limit: 100. Build query with `[]string` conditions and `[]any` args, join with AND.
+
+### SQLite Timestamp Parsing
+- Reuse `parseSQLiteTimestamp()` from `registry.go` for consistent time parsing.
+- SQLite stores timestamps as text; parse with multiple format attempts.
+
+### HTTP Server Lifecycle Integration
+- `HTTPAPI` struct created in `main()`, set on Server via `SetHTTPAPI()`.
+- Server.Start() launches HTTP listener in background goroutine if HTTPAPI is set.
+- Server.Stop() calls `httpShutdown(ctx)` for graceful drain before cancelling main context.
+- Config: `server.http_port` (0 = disabled, 1-65535 = enabled).
+
+### Testing HTTP APIs
+- `httptest.NewRecorder()` + `handler.ServeHTTP()` for unit tests (no real server needed).
+- Helper functions: `setupHTTPAPI()`, `authRequest()` for DRY test setup.
+- FK constraints require seeding in order: nodes → sessions → events.
+- In-memory SQLite with `?_foreign_keys=on` for realistic constraint testing.

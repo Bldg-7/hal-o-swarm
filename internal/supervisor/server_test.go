@@ -12,10 +12,12 @@ func TestServerLifecycle(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.SupervisorConfig{
 		Server: struct {
-			Port                  int    `json:"port"`
-			AuthToken             string `json:"auth_token"`
-			HeartbeatIntervalSec  int    `json:"heartbeat_interval_sec"`
-			HeartbeatTimeoutCount int    `json:"heartbeat_timeout_count"`
+			Port                  int      `json:"port"`
+			HTTPPort              int      `json:"http_port"`
+			AuthToken             string   `json:"auth_token"`
+			HeartbeatIntervalSec  int      `json:"heartbeat_interval_sec"`
+			HeartbeatTimeoutCount int      `json:"heartbeat_timeout_count"`
+			AllowedOrigins        []string `json:"allowed_origins"`
 		}{
 			Port:                  9999,
 			AuthToken:             "test-token",
@@ -64,10 +66,12 @@ func TestServerDoubleStart(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.SupervisorConfig{
 		Server: struct {
-			Port                  int    `json:"port"`
-			AuthToken             string `json:"auth_token"`
-			HeartbeatIntervalSec  int    `json:"heartbeat_interval_sec"`
-			HeartbeatTimeoutCount int    `json:"heartbeat_timeout_count"`
+			Port                  int      `json:"port"`
+			HTTPPort              int      `json:"http_port"`
+			AuthToken             string   `json:"auth_token"`
+			HeartbeatIntervalSec  int      `json:"heartbeat_interval_sec"`
+			HeartbeatTimeoutCount int      `json:"heartbeat_timeout_count"`
+			AllowedOrigins        []string `json:"allowed_origins"`
 		}{
 			Port:                  9998,
 			AuthToken:             "test-token",
@@ -105,10 +109,12 @@ func TestServerDoubleStop(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.SupervisorConfig{
 		Server: struct {
-			Port                  int    `json:"port"`
-			AuthToken             string `json:"auth_token"`
-			HeartbeatIntervalSec  int    `json:"heartbeat_interval_sec"`
-			HeartbeatTimeoutCount int    `json:"heartbeat_timeout_count"`
+			Port                  int      `json:"port"`
+			HTTPPort              int      `json:"http_port"`
+			AuthToken             string   `json:"auth_token"`
+			HeartbeatIntervalSec  int      `json:"heartbeat_interval_sec"`
+			HeartbeatTimeoutCount int      `json:"heartbeat_timeout_count"`
+			AllowedOrigins        []string `json:"allowed_origins"`
 		}{
 			Port:                  9997,
 			AuthToken:             "test-token",
@@ -149,10 +155,12 @@ func TestServerContextCancellation(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.SupervisorConfig{
 		Server: struct {
-			Port                  int    `json:"port"`
-			AuthToken             string `json:"auth_token"`
-			HeartbeatIntervalSec  int    `json:"heartbeat_interval_sec"`
-			HeartbeatTimeoutCount int    `json:"heartbeat_timeout_count"`
+			Port                  int      `json:"port"`
+			HTTPPort              int      `json:"http_port"`
+			AuthToken             string   `json:"auth_token"`
+			HeartbeatIntervalSec  int      `json:"heartbeat_interval_sec"`
+			HeartbeatTimeoutCount int      `json:"heartbeat_timeout_count"`
+			AllowedOrigins        []string `json:"allowed_origins"`
 		}{
 			Port:                  9996,
 			AuthToken:             "test-token",
@@ -203,10 +211,12 @@ func TestServerGracefulShutdown(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.SupervisorConfig{
 		Server: struct {
-			Port                  int    `json:"port"`
-			AuthToken             string `json:"auth_token"`
-			HeartbeatIntervalSec  int    `json:"heartbeat_interval_sec"`
-			HeartbeatTimeoutCount int    `json:"heartbeat_timeout_count"`
+			Port                  int      `json:"port"`
+			HTTPPort              int      `json:"http_port"`
+			AuthToken             string   `json:"auth_token"`
+			HeartbeatIntervalSec  int      `json:"heartbeat_interval_sec"`
+			HeartbeatTimeoutCount int      `json:"heartbeat_timeout_count"`
+			AllowedOrigins        []string `json:"allowed_origins"`
 		}{
 			Port:                  9995,
 			AuthToken:             "test-token",
