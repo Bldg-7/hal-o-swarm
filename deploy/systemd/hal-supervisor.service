@@ -13,8 +13,7 @@ WorkingDirectory=/opt/hal-o-swarm
 # Environment and configuration
 EnvironmentFile=/etc/hal-o-swarm/supervisor.env
 ExecStart=/usr/local/bin/hal-supervisor \
-  --config /etc/hal-o-swarm/supervisor.config.json \
-  --db /var/lib/hal-o-swarm/supervisor.db
+  --config /etc/hal-o-swarm/supervisor.config.json
 
 # Process management
 Restart=on-failure

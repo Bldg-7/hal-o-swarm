@@ -87,8 +87,8 @@ HAL-O-SWARM follows a 2-tier hub-and-spoke architecture:
 git clone https://github.com/bldg-7/hal-o-swarm.git
 cd hal-o-swarm
 
-# Install all components
-sudo ./deploy/install.sh --all
+# Install all components from GitHub release binaries (no local build)
+sudo ./deploy/install-release.sh --all
 
 # Edit configuration files
 sudo nano /etc/hal-o-swarm/supervisor.config.json
@@ -108,7 +108,7 @@ sudo systemctl enable hal-agent
 #### Supervisor Only
 
 ```bash
-sudo ./deploy/install.sh --supervisor
+sudo ./deploy/install-release.sh --supervisor
 ```
 
 Installs:
@@ -120,7 +120,7 @@ Installs:
 #### Agent Only
 
 ```bash
-sudo ./deploy/install.sh --agent
+sudo ./deploy/install-release.sh --agent
 ```
 
 Installs:
@@ -132,7 +132,7 @@ Installs:
 #### CLI Tool Only
 
 ```bash
-sudo ./deploy/install.sh --halctl
+sudo ./deploy/install-release.sh --halctl
 ```
 
 Installs:
@@ -142,7 +142,7 @@ Installs:
 ### Custom Installation Paths
 
 ```bash
-sudo ./deploy/install.sh --all \
+sudo ./deploy/install-release.sh --all \
   --prefix /opt/hal \
   --config-dir /etc/hal \
   --data-dir /data/hal \
@@ -152,7 +152,7 @@ sudo ./deploy/install.sh --all \
 ### Dry Run (Preview Changes)
 
 ```bash
-sudo ./deploy/install.sh --all --dry-run
+sudo ./deploy/install-release.sh --all --dry-run
 ```
 
 Shows what would be installed without making changes.

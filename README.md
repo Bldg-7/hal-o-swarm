@@ -53,8 +53,8 @@ HAL-O-SWARM is a distributed supervisor daemon that provides:
 git clone https://github.com/bldg-7/hal-o-swarm.git
 cd hal-o-swarm
 
-# Install all components
-sudo ./deploy/install.sh --all
+# Install all components from GitHub release binaries (no local build)
+sudo ./deploy/install-release.sh --all
 
 # Edit configuration
 sudo nano /etc/hal-o-swarm/supervisor.config.json
