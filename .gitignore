@@ -38,3 +38,12 @@ env-manifest.json
 # Build artifacts
 /bin/
 /dist/
+
+# Root-level local build outputs
+/supervisor
+/agent
+/halctl
+
+# Common release archives
+*.tar.gz
+*.zip
