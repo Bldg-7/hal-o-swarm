@@ -79,7 +79,7 @@ func NewCommandDispatcher(db *sql.DB, registry *NodeRegistry, tracker *SessionTr
 		logger = zap.NewNop()
 	}
 
-	return &CommandDispatcher{
+	dispatcher := &CommandDispatcher{
 		db:        db,
 		registry:  registry,
 		tracker:   tracker,
@@ -87,6 +87,12 @@ func NewCommandDispatcher(db *sql.DB, registry *NodeRegistry, tracker *SessionTr
 		transport: &hubCommandTransport{hub: hub},
 		pending:   make(map[string]chan *CommandResult),
 	}
+
+	if hub != nil {
+		hub.ConfigureCommandResultDispatcher(dispatcher)
+	}
+
+	return dispatcher
 }
 
 func NewCommandDispatcherWithTransport(db *sql.DB, registry *NodeRegistry, tracker *SessionTracker, transport commandTransport, logger *zap.Logger) *CommandDispatcher {

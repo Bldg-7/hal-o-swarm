@@ -19,6 +19,7 @@ type MessageType string
 const (
 	MessageTypeEvent          MessageType = "event"
 	MessageTypeCommand        MessageType = "command"
+	MessageTypeCommandResult  MessageType = "command_result"
 	MessageTypeHeartbeat      MessageType = "heartbeat"
 	MessageTypeRegister       MessageType = "register"
 	MessageTypeCredentialSync MessageType = "credential_sync"

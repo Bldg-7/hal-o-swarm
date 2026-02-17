@@ -23,6 +23,7 @@ type Agent struct {
 
 	logger             *zap.Logger
 	wsClient           *WSClient
+	opencodeAdapter    OpencodeAdapter
 	credApplier        *CredentialApplier
 	authReporter       *AuthReporter
 	oauthExecutor      *OAuthTriggerExecutor
@@ -74,11 +75,22 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	a.credApplier = NewCredentialApplier(logger)
+	opencodeURL := fmt.Sprintf("http://127.0.0.1:%d", a.cfg.OpencodePort)
+	realAdapter := NewOpencodeAdapter(opencodeURL, "")
+	for _, project := range a.cfg.Projects {
+		realAdapter.RegisterProjectClient(project.Name, project.Directory, opencodeURL)
+	}
+	a.opencodeAdapter = realAdapter
+
 	a.wsClient = NewWSClient(
 		a.cfg.SupervisorURL,
 		a.cfg.AuthToken,
 		logger,
 	)
+
+	if err := RegisterSessionCommandHandlers(a.wsClient, a.opencodeAdapter, logger); err != nil {
+		return fmt.Errorf("register session command handlers: %w", err)
+	}
 
 	if err := RegisterCredentialPushHandler(a.wsClient, a.credApplier); err != nil {
 		return fmt.Errorf("register credential push handler: %w", err)

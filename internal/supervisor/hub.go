@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +41,7 @@ type Hub struct {
 
 	credentialRegistry  *NodeRegistry
 	expectedCredVersion int64
+	commandDispatcher   *CommandDispatcher
 }
 
 func NewHub(
@@ -227,6 +229,12 @@ func (h *Hub) ConfigureCredentialReconciliation(registry *NodeRegistry, expected
 	h.expectedCredVersion = expectedVersion
 }
 
+func (h *Hub) ConfigureCommandResultDispatcher(dispatcher *CommandDispatcher) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.commandDispatcher = dispatcher
+}
+
 func (h *Hub) reconcileCredentialSync(payload []byte) {
 	h.mu.RLock()
 	registry := h.credentialRegistry
@@ -256,6 +264,20 @@ func (h *Hub) reconcileAuthState(nodeID string, payload []byte) {
 			zap.String("node_id", nodeID),
 			zap.Error(err),
 		)
+	}
+}
+
+func (h *Hub) handleCommandResultEnvelope(env *shared.Envelope) {
+	h.mu.RLock()
+	dispatcher := h.commandDispatcher
+	h.mu.RUnlock()
+
+	if dispatcher == nil {
+		return
+	}
+
+	if err := dispatcher.HandleCommandResultEnvelope(env); err != nil {
+		h.logger.Warn("command result ingest failed", zap.Error(err))
 	}
 }
 

@@ -267,3 +267,54 @@ func TestHubGracefulShutdown(t *testing.T) {
 		t.Fatal("Hub.Run did not exit after context cancellation")
 	}
 }
+
+func TestAgentConnRoutesCommandResultToDispatcher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hub := newTestHub(ctx, 30*time.Second, 3)
+	dispatcher := NewCommandDispatcherWithTransport(nil, nil, nil, nil, zap.NewNop())
+	hub.ConfigureCommandResultDispatcher(dispatcher)
+
+	commandID := "cmd-route-1"
+	resultCh := make(chan *CommandResult, 1)
+	dispatcher.pendingMu.Lock()
+	dispatcher.pending[commandID] = resultCh
+	dispatcher.pendingMu.Unlock()
+
+	payload, err := json.Marshal(CommandResult{
+		CommandID: commandID,
+		Status:    CommandStatusSuccess,
+		Output:    "ok",
+		Timestamp: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("marshal command result payload: %v", err)
+	}
+
+	env := &shared.Envelope{
+		Version:   shared.ProtocolVersion,
+		Type:      string(shared.MessageTypeCommandResult),
+		RequestID: commandID,
+		Timestamp: time.Now().UTC().Unix(),
+		Payload:   payload,
+	}
+
+	conn := &AgentConn{hub: hub, agentID: "node-test"}
+	conn.handleEnvelope(env)
+
+	select {
+	case result := <-resultCh:
+		if result == nil {
+			t.Fatal("expected non-nil command result")
+		}
+		if result.CommandID != commandID {
+			t.Fatalf("expected command id %q, got %q", commandID, result.CommandID)
+		}
+		if result.Status != CommandStatusSuccess {
+			t.Fatalf("expected success status, got %q", result.Status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for command result routing")
+	}
+}

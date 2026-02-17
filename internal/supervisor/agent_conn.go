@@ -88,6 +88,11 @@ func (c *AgentConn) handleEnvelope(env *shared.Envelope) {
 
 	if env.Type == string(shared.MessageTypeAuthState) {
 		c.hub.reconcileAuthState(c.agentID, env.Payload)
+		return
+	}
+
+	if env.Type == string(shared.MessageTypeCommandResult) {
+		c.hub.handleCommandResultEnvelope(env)
 	}
 }
 

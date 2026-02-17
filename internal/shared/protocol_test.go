@@ -160,7 +160,7 @@ func TestEnvelopeOptionalRequestID(t *testing.T) {
 }
 
 func TestEnvelopeMultipleMessageTypes(t *testing.T) {
-	types := []string{"event", "command", "heartbeat"}
+	types := []string{"event", "command", "command_result", "heartbeat"}
 	for _, msgType := range types {
 		env := &Envelope{
 			Version:   ProtocolVersion,

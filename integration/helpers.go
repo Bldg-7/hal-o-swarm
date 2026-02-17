@@ -24,8 +24,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const commandResultMessageType = "command_result"
-
 type supervisorHarness struct {
 	t              *testing.T
 	token          string
@@ -235,7 +233,7 @@ func (h *supervisorHarness) readLoop(node *nodeConnection) {
 					return
 				}
 			}
-		case commandResultMessageType:
+		case string(shared.MessageTypeCommandResult):
 			if err := h.dispatcher.HandleCommandResultEnvelope(env); err != nil {
 				h.t.Errorf("handle command result envelope: %v", err)
 				return
@@ -450,6 +448,9 @@ func newAgentHarness(t *testing.T, h *supervisorHarness, nodeID string, projects
 		agent.WithSnapshotProvider(ag.snapshot),
 		agent.WithMessageHandler(ag.handleMessage),
 	)
+	if err := agent.RegisterSessionCommandHandlers(ag.wsClient, ag.adapter, zap.NewNop()); err != nil {
+		t.Fatalf("register session command handlers: %v", err)
+	}
 
 	ag.wsClient.Connect(ctx)
 	ag.startHeartbeats()
@@ -614,7 +615,7 @@ func (a *agentHarness) handleMessage(env *shared.Envelope) error {
 	payload, _ := json.Marshal(result)
 	response := &shared.Envelope{
 		Version:   shared.ProtocolVersion,
-		Type:      commandResultMessageType,
+		Type:      string(shared.MessageTypeCommandResult),
 		RequestID: cmd.CommandID,
 		Timestamp: time.Now().UTC().Unix(),
 		Payload:   payload,
