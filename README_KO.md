@@ -90,7 +90,7 @@ HAL-O-SWARM은 분산된 LLM 코딩 에이전트에 대한 중앙 집중식 감�
 
 ```bash
 # 저장소 클론
-git clone https://github.com/code-yeongyu/hal-o-swarm.git
+git clone https://github.com/bldg-7/hal-o-swarm.git
 cd hal-o-swarm
 
 # 모든 컴포넌트 설치 (supervisor + agent + halctl)
@@ -506,7 +506,7 @@ MIT 라이선스 - 자세한 내용은 [LICENSE](LICENSE) 파일 참조
 ## 지원
 
 - **문서**: [docs/](docs/) 디렉토리
-- **이슈**: [GitHub Issues](https://github.com/code-yeongyu/hal-o-swarm/issues)
+- **이슈**: [GitHub Issues](https://github.com/bldg-7/hal-o-swarm/issues)
 - **Discord**: #hal-o-swarm 채널
 - **이메일**: support@example.com
 
