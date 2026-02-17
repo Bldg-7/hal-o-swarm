@@ -68,7 +68,7 @@ Before updating supervisor, create backup:
 sudo cp /usr/local/bin/hal-supervisor /usr/local/bin/hal-supervisor.backup
 
 # Update supervisor
-sudo ./deploy/install.sh --supervisor
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --supervisor
 
 # If update fails, restore backup
 sudo cp /usr/local/bin/hal-supervisor.backup /usr/local/bin/hal-supervisor
@@ -113,7 +113,7 @@ Before updating agent, create backup on each node:
 sudo cp /usr/local/bin/hal-agent /usr/local/bin/hal-agent.backup
 
 # Update agent
-sudo ./deploy/install.sh --agent
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --agent
 
 # If update fails, restore backup
 sudo cp /usr/local/bin/hal-agent.backup /usr/local/bin/hal-agent

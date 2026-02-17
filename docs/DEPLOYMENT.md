@@ -83,12 +83,8 @@ HAL-O-SWARM follows a 2-tier hub-and-spoke architecture:
 ### Quick Start (All Components)
 
 ```bash
-# Clone repository
-git clone https://github.com/bldg-7/hal-o-swarm.git
-cd hal-o-swarm
-
-# Install all components from GitHub release binaries (no local build)
-sudo ./deploy/install-release.sh --all
+# Install all components from GitHub release binaries (no local build, no clone)
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --all
 
 # Edit configuration files
 sudo nano /etc/hal-o-swarm/supervisor.config.json
@@ -108,7 +104,7 @@ sudo systemctl enable hal-agent
 #### Supervisor Only
 
 ```bash
-sudo ./deploy/install-release.sh --supervisor
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --supervisor
 ```
 
 Installs:
@@ -120,7 +116,7 @@ Installs:
 #### Agent Only
 
 ```bash
-sudo ./deploy/install-release.sh --agent
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --agent
 ```
 
 Installs:
@@ -132,7 +128,7 @@ Installs:
 #### CLI Tool Only
 
 ```bash
-sudo ./deploy/install-release.sh --halctl
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --halctl
 ```
 
 Installs:
@@ -142,7 +138,7 @@ Installs:
 ### Custom Installation Paths
 
 ```bash
-sudo ./deploy/install-release.sh --all \
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --all \
   --prefix /opt/hal \
   --config-dir /etc/hal \
   --data-dir /data/hal \
@@ -152,7 +148,7 @@ sudo ./deploy/install-release.sh --all \
 ### Dry Run (Preview Changes)
 
 ```bash
-sudo ./deploy/install-release.sh --all --dry-run
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --all --dry-run
 ```
 
 Shows what would be installed without making changes.

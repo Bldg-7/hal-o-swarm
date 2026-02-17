@@ -89,17 +89,13 @@ HAL-O-SWARM은 분산된 LLM 코딩 에이전트에 대한 중앙 집중식 감�
 ### 설치
 
 ```bash
-# 저장소 클론
-git clone https://github.com/bldg-7/hal-o-swarm.git
-cd hal-o-swarm
-
-# 모든 컴포넌트 설치 (릴리즈 바이너리 다운로드, 로컬 빌드 없음)
-sudo ./deploy/install-release.sh --all
+# 모든 컴포넌트 설치 (릴리즈 바이너리 다운로드, 로컬 빌드/클론 없음)
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --all
 
 # 또는 개별 설치
-sudo ./deploy/install-release.sh --supervisor  # 중앙 허브만
-sudo ./deploy/install-release.sh --agent       # 에이전트만
-sudo ./deploy/install-release.sh --halctl      # CLI 도구만
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --supervisor  # 중앙 허브만
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --agent       # 에이전트만
+curl -fsSL https://raw.githubusercontent.com/Bldg-7/hal-o-swarm/main/deploy/install-release.sh | sudo bash -s -- --halctl      # CLI 도구만
 ```
 
 ### 설정
