@@ -139,13 +139,18 @@ prepare_users_dirs() {
   fi
 
   mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
+  mkdir -p /opt/hal-o-swarm
   chmod 755 "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
 
   if [[ "$INSTALL_SUPERVISOR" == "true" ]]; then
     chown -R hal-supervisor:hal-supervisor "$DATA_DIR" "$LOG_DIR"
+    chown hal-supervisor:hal-supervisor /opt/hal-o-swarm
   fi
   if [[ "$INSTALL_AGENT" == "true" ]]; then
     chown -R hal-agent:hal-agent "$DATA_DIR" "$LOG_DIR"
+    if [[ "$INSTALL_SUPERVISOR" != "true" ]]; then
+      chown hal-agent:hal-agent /opt/hal-o-swarm
+    fi
   fi
 
   log_ok "Prepared users and directories"
@@ -258,6 +263,8 @@ EOF
       chmod 600 "$CONFIG_DIR/supervisor.env"
       log_ok "Installed supervisor env file"
     fi
+
+    chown hal-supervisor:hal-supervisor "$CONFIG_DIR/supervisor.config.json" "$CONFIG_DIR/supervisor.env"
   fi
 
   if [[ "$INSTALL_AGENT" == "true" ]]; then
@@ -290,6 +297,8 @@ EOF
       chmod 600 "$CONFIG_DIR/agent.env"
       log_ok "Installed agent env file"
     fi
+
+    chown hal-agent:hal-agent "$CONFIG_DIR/agent.config.json" "$CONFIG_DIR/agent.env"
   fi
 }
 
@@ -308,7 +317,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
+Type=simple
 User=hal-supervisor
 Group=hal-supervisor
 WorkingDirectory=/opt/hal-o-swarm
