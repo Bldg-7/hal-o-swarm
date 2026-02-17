@@ -14,6 +14,7 @@ DATA_DIR="/var/lib/hal-o-swarm"
 LOG_DIR="/var/log/hal-o-swarm"
 
 DRY_RUN=false
+TMPDIR=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -398,7 +399,15 @@ enable_services() {
   log_ok "Enabled systemd units"
 }
 
+cleanup() {
+  if [[ -n "$TMPDIR" && -d "$TMPDIR" ]]; then
+    rm -rf "$TMPDIR"
+  fi
+}
+
 main() {
+  trap cleanup EXIT
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --supervisor)
@@ -491,25 +500,23 @@ main() {
   prepare_users_dirs
 
   if [[ "$DRY_RUN" != "true" ]]; then
-    local tmpdir
-    tmpdir="$(mktemp -d)"
-    trap 'rm -rf "$tmpdir"' EXIT
+    TMPDIR="$(mktemp -d)"
 
-    curl -fL "$url" -o "$tmpdir/$asset"
-    tar -xzf "$tmpdir/$asset" -C "$tmpdir"
+    curl -fL "$url" -o "$TMPDIR/$asset"
+    tar -xzf "$TMPDIR/$asset" -C "$TMPDIR"
 
     mkdir -p "$INSTALL_PREFIX/bin"
 
     if [[ "$INSTALL_SUPERVISOR" == "true" ]]; then
-      install -m 0755 "$tmpdir/hal-supervisor" "$INSTALL_PREFIX/bin/hal-supervisor"
+      install -m 0755 "$TMPDIR/hal-supervisor" "$INSTALL_PREFIX/bin/hal-supervisor"
       log_ok "Installed hal-supervisor"
     fi
     if [[ "$INSTALL_AGENT" == "true" ]]; then
-      install -m 0755 "$tmpdir/hal-agent" "$INSTALL_PREFIX/bin/hal-agent"
+      install -m 0755 "$TMPDIR/hal-agent" "$INSTALL_PREFIX/bin/hal-agent"
       log_ok "Installed hal-agent"
     fi
     if [[ "$INSTALL_HALCTL" == "true" ]]; then
-      install -m 0755 "$tmpdir/halctl" "$INSTALL_PREFIX/bin/halctl"
+      install -m 0755 "$TMPDIR/halctl" "$INSTALL_PREFIX/bin/halctl"
       log_ok "Installed halctl"
     fi
   else
