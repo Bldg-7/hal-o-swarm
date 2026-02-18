@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -219,6 +220,9 @@ func TestDiscordCommandsHappy(t *testing.T) {
 		}
 		if embed.Color != colorInfo {
 			t.Fatalf("expected info color, got %d", embed.Color)
+		}
+		if !strings.Contains(embed.Description, "node-1") {
+			t.Fatalf("expected node id in description, got %q", embed.Description)
 		}
 	})
 

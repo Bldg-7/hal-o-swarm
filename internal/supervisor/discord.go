@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -412,7 +413,42 @@ func (b *DiscordBot) handleNodes() *discordgo.MessageEmbed {
 	}
 
 	var description string
-	if b.tracker != nil {
+	nodes := make([]NodeEntry, 0)
+	if b.dispatcher != nil && b.dispatcher.registry != nil {
+		nodes = b.dispatcher.registry.ListNodes()
+	}
+	if len(nodes) > 0 {
+		sort.Slice(nodes, func(i, j int) bool {
+			return nodes[i].ID < nodes[j].ID
+		})
+
+		lines := []string{
+			fmt.Sprintf("**Connected:** %d", count),
+			fmt.Sprintf("**Known nodes:** %d", len(nodes)),
+		}
+
+		const maxNodeLines = 10
+		for i, node := range nodes {
+			if i >= maxNodeLines {
+				lines = append(lines, fmt.Sprintf("...and %d more", len(nodes)-maxNodeLines))
+				break
+			}
+
+			lastHeartbeat := "-"
+			if !node.LastHeartbeat.IsZero() {
+				lastHeartbeat = node.LastHeartbeat.UTC().Format("2006-01-02 15:04:05")
+			}
+
+			lines = append(lines, fmt.Sprintf("`%s` (%s) - %s - hb: %s",
+				valueOrDash(node.ID),
+				valueOrDash(node.Hostname),
+				node.Status,
+				lastHeartbeat,
+			))
+		}
+
+		description = strings.Join(lines, "\n")
+	} else if b.tracker != nil {
 		sessions := b.tracker.GetAllSessions()
 		nodeSet := make(map[string]bool)
 		for _, s := range sessions {
