@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Bldg-7/hal-o-swarm/internal/shared"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/Bldg-7/hal-o-swarm/internal/shared"
 	"go.uber.org/zap"
 )
 
@@ -92,8 +92,10 @@ func (h *Hub) Run() {
 		case conn := <-h.register:
 			h.mu.Lock()
 			if existing, ok := h.clients[conn.agentID]; ok {
-				close(existing.send)
-				existing.conn.Close()
+				if existing != conn {
+					close(existing.send)
+					existing.conn.Close()
+				}
 			}
 			h.clients[conn.agentID] = conn
 			h.mu.Unlock()
@@ -107,7 +109,7 @@ func (h *Hub) Run() {
 		case conn := <-h.unregister:
 			removed := false
 			h.mu.Lock()
-			if _, ok := h.clients[conn.agentID]; ok {
+			if current, ok := h.clients[conn.agentID]; ok && current == conn {
 				delete(h.clients, conn.agentID)
 				close(conn.send)
 				removed = true

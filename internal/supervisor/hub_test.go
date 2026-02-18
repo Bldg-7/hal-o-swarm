@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Bldg-7/hal-o-swarm/internal/shared"
+	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
 
@@ -265,6 +265,58 @@ func TestHubGracefulShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Hub.Run did not exit after context cancellation")
+	}
+}
+
+func TestHubReconnectSameNodeIDKeepsLatestConnection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	hub := newTestHub(ctx, 100*time.Millisecond, 3)
+	go hub.Run()
+
+	server := startTestServer(hub)
+	defer server.Close()
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer test-token")
+	header.Set("X-Node-ID", "node-reconnect")
+
+	conn1, _, err := websocket.DefaultDialer.Dial(wsURL(server), header)
+	if err != nil {
+		t.Fatalf("first dial failed: %v", err)
+	}
+	defer conn1.Close()
+
+	select {
+	case <-hub.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for first online event")
+	}
+
+	conn2, _, err := websocket.DefaultDialer.Dial(wsURL(server), header)
+	if err != nil {
+		t.Fatalf("second dial failed: %v", err)
+	}
+	defer conn2.Close()
+
+	select {
+	case <-hub.Events():
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for second online event")
+	}
+
+	time.Sleep(150 * time.Millisecond)
+
+	if got := hub.ClientCount(); got != 1 {
+		t.Fatalf("expected 1 active client after reconnect, got %d", got)
+	}
+
+	sendHeartbeat(t, conn2)
+
+	time.Sleep(100 * time.Millisecond)
+	if got := hub.ClientCount(); got != 1 {
+		t.Fatalf("expected reconnected client to remain active, got %d", got)
 	}
 }
 
