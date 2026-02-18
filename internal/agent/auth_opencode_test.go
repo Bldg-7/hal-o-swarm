@@ -2,259 +2,107 @@ package agent
 
 import (
 	"context"
-	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Bldg-7/hal-o-swarm/internal/shared"
 )
 
-// --- Fixtures ---
+func TestOpencodeAuthBinaryMissing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", "")
+	adapter := NewOpencodeAuthAdapterWithCommand(nil, nil, []string{"missing-opencode-binary", "auth", "list"})
+	report := adapter.CheckAuth(context.Background())
 
-const fixtureOpencodeAuthenticated = `Stored Credentials:
-  Provider: anthropic
-    Type: api
-    Status: active
-    Created: 2026-01-15T10:30:00Z
-
-  Provider: openai
-    Type: oauth
-    Status: active
-    Created: 2026-01-10T08:00:00Z
-
-Environment Variables:
-  ANTHROPIC_API_KEY: set (from environment)
-`
-
-const fixtureOpencodeAuthenticatedEnvOnly = `Stored Credentials:
-  No stored credentials found.
-
-Environment Variables:
-  ANTHROPIC_API_KEY: set (from environment)
-`
-
-const fixtureOpencodeUnauthenticated = `Stored Credentials:
-  No stored credentials found.
-
-Environment Variables:
-  No environment variables providing authentication detected.
-`
-
-const fixtureOpencodeUnauthenticatedExplicit = `Not authenticated. Run 'opencode auth login' to authenticate.
-No credentials found.
-`
-
-const fixtureOpencodeUnrecognized = `Some completely unexpected output format
-that does not match any known pattern
-version 99.99.99
-`
-
-// --- Tests ---
-
-func TestOpencodeAuthParserAuthenticated(t *testing.T) {
-	tests := []struct {
-		name    string
-		fixture string
-		reason  string
-	}{
-		{
-			name:    "stored credentials active",
-			fixture: fixtureOpencodeAuthenticated,
-			reason:  "credentials found",
-		},
-		{
-			name:    "env var only",
-			fixture: fixtureOpencodeAuthenticatedEnvOnly,
-			reason:  "credentials found",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runner := &MockAuthRunner{
-				Result: AuthRunResult{
-					Stdout:   tt.fixture,
-					ExitCode: 0,
-				},
-			}
-			adapter := NewOpencodeAuthAdapter(runner, nil)
-			report := adapter.CheckAuth(context.Background())
-
-			if report.Tool != shared.ToolIdentifierOpenCode {
-				t.Errorf("Tool = %q, want %q", report.Tool, shared.ToolIdentifierOpenCode)
-			}
-			if report.Status != shared.AuthStatusAuthenticated {
-				t.Errorf("Status = %q, want %q", report.Status, shared.AuthStatusAuthenticated)
-			}
-			if report.Reason != tt.reason {
-				t.Errorf("Reason = %q, want %q", report.Reason, tt.reason)
-			}
-			if report.CheckedAt.IsZero() {
-				t.Error("CheckedAt should not be zero")
-			}
-		})
+	if report.Status != shared.AuthStatusNotInstalled {
+		t.Fatalf("status = %q, want %q", report.Status, shared.AuthStatusNotInstalled)
 	}
 }
 
-func TestOpencodeAuthParserNotInstalled(t *testing.T) {
-	tests := []struct {
-		name   string
-		result AuthRunResult
-	}{
-		{
-			name: "exec error not found",
-			result: AuthRunResult{
-				Err:      errors.New("exec: \"opencode\": executable file not found in $PATH"),
-				ExitCode: -1,
-			},
-		},
-		{
-			name: "stderr command not found",
-			result: AuthRunResult{
-				Stderr:   "bash: opencode: command not found",
-				Err:      errors.New("exit status 127"),
-				ExitCode: 127,
-			},
-		},
-		{
-			name: "no such file",
-			result: AuthRunResult{
-				Err:      errors.New("fork/exec /usr/local/bin/opencode: no such file or directory"),
-				ExitCode: -1,
-			},
-		},
-	}
+func TestOpencodeAuthNoAuthFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runner := &MockAuthRunner{Result: tt.result}
-			adapter := NewOpencodeAuthAdapter(runner, nil)
-			report := adapter.CheckAuth(context.Background())
+	binary := writeExecutableOpencode(t, filepath.Join(t.TempDir(), "opencode"))
+	adapter := NewOpencodeAuthAdapterWithCommand(nil, nil, []string{binary, "auth", "list"})
+	report := adapter.CheckAuth(context.Background())
 
-			if report.Status != shared.AuthStatusNotInstalled {
-				t.Errorf("Status = %q, want %q", report.Status, shared.AuthStatusNotInstalled)
-			}
-			if report.Tool != shared.ToolIdentifierOpenCode {
-				t.Errorf("Tool = %q, want %q", report.Tool, shared.ToolIdentifierOpenCode)
-			}
-		})
+	if report.Status != shared.AuthStatusUnauthenticated {
+		t.Fatalf("status = %q, want %q", report.Status, shared.AuthStatusUnauthenticated)
 	}
 }
 
-func TestOpencodeAuthParserUnauthenticated(t *testing.T) {
-	tests := []struct {
-		name    string
-		fixture string
-	}{
-		{
-			name:    "no credentials listed",
-			fixture: fixtureOpencodeUnauthenticated,
-		},
-		{
-			name:    "explicit not authenticated message",
-			fixture: fixtureOpencodeUnauthenticatedExplicit,
-		},
-		{
-			name:    "empty output",
-			fixture: "",
-		},
-	}
+func TestOpencodeAuthParsesCredentialFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runner := &MockAuthRunner{
-				Result: AuthRunResult{
-					Stdout:   tt.fixture,
-					ExitCode: 0,
-				},
-			}
-			adapter := NewOpencodeAuthAdapter(runner, nil)
-			report := adapter.CheckAuth(context.Background())
+	authPath := filepath.Join(home, ".local", "share", "opencode", "auth.json")
+	writeAuthFixtureFile(t, authPath, `{"credentials":[{"provider":"openai","type":"oauth"},{"provider":"anthropic","type":"api"}]}`)
 
-			if report.Status != shared.AuthStatusUnauthenticated {
-				t.Errorf("Status = %q, want %q\nFixture:\n%s", report.Status, shared.AuthStatusUnauthenticated, tt.fixture)
-			}
-			if report.Tool != shared.ToolIdentifierOpenCode {
-				t.Errorf("Tool = %q, want %q", report.Tool, shared.ToolIdentifierOpenCode)
-			}
-		})
+	binary := writeExecutableOpencode(t, filepath.Join(t.TempDir(), "opencode"))
+	adapter := NewOpencodeAuthAdapterWithCommand(nil, nil, []string{binary, "auth", "list"})
+	report := adapter.CheckAuth(context.Background())
+
+	if report.Status != shared.AuthStatusAuthenticated {
+		t.Fatalf("status = %q, want %q", report.Status, shared.AuthStatusAuthenticated)
 	}
 }
 
-func TestOpencodeAuthParserTimeout(t *testing.T) {
-	runner := &MockAuthRunner{
-		Result: AuthRunResult{
-			TimedOut: true,
-			Err:      context.DeadlineExceeded,
-			ExitCode: -1,
-		},
+func TestOpencodeAuthUsesXDGDataHome(t *testing.T) {
+	home := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", xdg)
+
+	authPath := filepath.Join(xdg, "opencode", "auth.json")
+	writeAuthFixtureFile(t, authPath, `{"providers":{"openai":{"token":"x"}}}`)
+
+	binary := writeExecutableOpencode(t, filepath.Join(t.TempDir(), "opencode"))
+	adapter := NewOpencodeAuthAdapterWithCommand(nil, nil, []string{binary, "auth", "list"})
+	report := adapter.CheckAuth(context.Background())
+
+	if report.Status != shared.AuthStatusAuthenticated {
+		t.Fatalf("status = %q, want %q", report.Status, shared.AuthStatusAuthenticated)
 	}
-	adapter := NewOpencodeAuthAdapter(runner, nil)
+}
+
+func TestOpencodeAuthInvalidFileFormat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+
+	authPath := filepath.Join(home, ".local", "share", "opencode", "auth.json")
+	writeAuthFixtureFile(t, authPath, `not-json`)
+
+	binary := writeExecutableOpencode(t, filepath.Join(t.TempDir(), "opencode"))
+	adapter := NewOpencodeAuthAdapterWithCommand(nil, nil, []string{binary, "auth", "list"})
 	report := adapter.CheckAuth(context.Background())
 
 	if report.Status != shared.AuthStatusError {
-		t.Errorf("Status = %q, want %q", report.Status, shared.AuthStatusError)
+		t.Fatalf("status = %q, want %q", report.Status, shared.AuthStatusError)
 	}
-	if report.Reason != "command timed out" {
-		t.Errorf("Reason = %q, want %q", report.Reason, "command timed out")
-	}
-}
-
-func TestOpencodeAuthParserUnrecognizedOutput(t *testing.T) {
-	runner := &MockAuthRunner{
-		Result: AuthRunResult{
-			Stdout:   fixtureOpencodeUnrecognized,
-			ExitCode: 0,
-		},
-	}
-	adapter := NewOpencodeAuthAdapter(runner, nil)
-	report := adapter.CheckAuth(context.Background())
-
-	if report.Status != shared.AuthStatusError {
-		t.Errorf("Status = %q, want %q", report.Status, shared.AuthStatusError)
-	}
-	if report.Reason != "unexpected output format" {
-		t.Errorf("Reason = %q, want %q", report.Reason, "unexpected output format")
+	if report.Reason != "invalid auth file format" {
+		t.Fatalf("reason = %q, want invalid auth file format", report.Reason)
 	}
 }
 
-func TestOpencodeAuthParserNonZeroExit(t *testing.T) {
-	runner := &MockAuthRunner{
-		Result: AuthRunResult{
-			Stderr:   "error: database locked",
-			Err:      errors.New("exit status 1"),
-			ExitCode: 1,
-		},
+func writeExecutableOpencode(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", path, err)
 	}
-	adapter := NewOpencodeAuthAdapter(runner, nil)
-	report := adapter.CheckAuth(context.Background())
-
-	if report.Status != shared.AuthStatusError {
-		t.Errorf("Status = %q, want %q", report.Status, shared.AuthStatusError)
-	}
-	if report.Reason == "" {
-		t.Error("Reason should not be empty for error status")
-	}
+	return path
 }
 
-func TestOpencodeAuthParserEnvVarNotSet(t *testing.T) {
-	// Env var listed but marked as "not set" should NOT count as authenticated
-	fixture := `Stored Credentials:
-  No stored credentials found.
-
-Environment Variables:
-  ANTHROPIC_API_KEY: not set
-`
-	runner := &MockAuthRunner{
-		Result: AuthRunResult{
-			Stdout:   fixture,
-			ExitCode: 0,
-		},
+func writeAuthFixtureFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
 	}
-	adapter := NewOpencodeAuthAdapter(runner, nil)
-	report := adapter.CheckAuth(context.Background())
-
-	// Should not be authenticated — env var is listed but "not set"
-	if report.Status == shared.AuthStatusAuthenticated {
-		t.Errorf("Status = %q, should NOT be authenticated when env var is 'not set'", report.Status)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }

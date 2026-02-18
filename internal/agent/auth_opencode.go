@@ -2,6 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,8 +19,6 @@ type AuthAdapter interface {
 	CheckAuth(ctx context.Context) shared.AuthStateReport
 }
 
-// OpencodeAuthAdapter checks opencode authentication status by running
-// `opencode auth list` and parsing the output for credential indicators.
 type OpencodeAuthAdapter struct {
 	runner        AuthRunner
 	logger        *zap.Logger
@@ -44,8 +47,9 @@ func NewOpencodeAuthAdapterWithCommand(runner AuthRunner, logger *zap.Logger, st
 	}
 }
 
-// CheckAuth runs `opencode auth list` and maps the output to a canonical AuthStateReport.
 func (a *OpencodeAuthAdapter) CheckAuth(ctx context.Context) shared.AuthStateReport {
+	_ = ctx
+
 	if len(a.statusCommand) == 0 {
 		return shared.AuthStateReport{
 			Tool:      shared.ToolIdentifierOpenCode,
@@ -55,21 +59,7 @@ func (a *OpencodeAuthAdapter) CheckAuth(ctx context.Context) shared.AuthStateRep
 		}
 	}
 
-	result := a.runner.RunAuthCheck(ctx, a.statusCommand)
-
-	// Timeout → error
-	if result.TimedOut {
-		a.logger.Warn("opencode auth check timed out")
-		return shared.AuthStateReport{
-			Tool:      shared.ToolIdentifierOpenCode,
-			Status:    shared.AuthStatusError,
-			Reason:    "command timed out",
-			CheckedAt: time.Now().UTC(),
-		}
-	}
-
-	// Command not found → not_installed
-	if isCommandNotFound(result) {
+	if !commandAvailable(a.statusCommand[0]) {
 		a.logger.Info("opencode not installed")
 		return shared.AuthStateReport{
 			Tool:      shared.ToolIdentifierOpenCode,
@@ -79,76 +69,184 @@ func (a *OpencodeAuthAdapter) CheckAuth(ctx context.Context) shared.AuthStateRep
 		}
 	}
 
-	// Parse output for credential indicators
-	return a.parseAuthOutput(result)
-}
-
-// parseAuthOutput examines stdout/stderr for credential indicators.
-func (a *OpencodeAuthAdapter) parseAuthOutput(result AuthRunResult) shared.AuthStateReport {
-	output := result.Stdout
-	if output == "" {
-		output = result.Stderr
-	}
-
-	lower := strings.ToLower(output)
-
-	hasAuth := hasAuthenticatedIndicator(lower)
-	hasUnauth := hasUnauthenticatedIndicator(lower)
-
-	// Authenticated wins when both present (e.g., no stored creds but env var set)
-	if hasAuth {
-		a.logger.Debug("opencode authenticated", zap.String("output_preview", truncate(output, 200)))
-		return shared.AuthStateReport{
-			Tool:      shared.ToolIdentifierOpenCode,
-			Status:    shared.AuthStatusAuthenticated,
-			Reason:    "credentials found",
-			CheckedAt: time.Now().UTC(),
-		}
-	}
-
-	if hasUnauth {
-		a.logger.Info("opencode unauthenticated", zap.String("output_preview", truncate(output, 200)))
-		return shared.AuthStateReport{
-			Tool:      shared.ToolIdentifierOpenCode,
-			Status:    shared.AuthStatusUnauthenticated,
-			Reason:    "no credentials found",
-			CheckedAt: time.Now().UTC(),
-		}
-	}
-
-	// Empty output with successful exit → unauthenticated (no credentials to list)
-	if strings.TrimSpace(output) == "" && result.ExitCode == 0 {
-		return shared.AuthStateReport{
-			Tool:      shared.ToolIdentifierOpenCode,
-			Status:    shared.AuthStatusUnauthenticated,
-			Reason:    "no credentials found",
-			CheckedAt: time.Now().UTC(),
-		}
-	}
-
-	// Non-zero exit with no recognized pattern → error
-	if result.ExitCode != 0 {
-		reason := "command exited with code " + strings.TrimSpace(strings.Replace(
-			result.Stderr, "\n", " ", -1))
-		if reason == "command exited with code " {
-			reason = "command failed with unknown error"
-		}
+	authFilePath, err := opencodeAuthFilePath()
+	if err != nil {
 		return shared.AuthStateReport{
 			Tool:      shared.ToolIdentifierOpenCode,
 			Status:    shared.AuthStatusError,
-			Reason:    truncate(reason, 200),
+			Reason:    "unable to resolve opencode auth file path",
 			CheckedAt: time.Now().UTC(),
 		}
 	}
 
-	// Output exists but unrecognized → error (defensive)
-	a.logger.Warn("opencode auth output unrecognized", zap.String("output_preview", truncate(output, 200)))
+	content, err := os.ReadFile(authFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return shared.AuthStateReport{
+				Tool:      shared.ToolIdentifierOpenCode,
+				Status:    shared.AuthStatusUnauthenticated,
+				Reason:    "no credentials found",
+				CheckedAt: time.Now().UTC(),
+			}
+		}
+
+		a.logger.Warn("failed to read opencode auth file",
+			zap.String("path", authFilePath),
+			zap.Error(err),
+		)
+		return shared.AuthStateReport{
+			Tool:      shared.ToolIdentifierOpenCode,
+			Status:    shared.AuthStatusError,
+			Reason:    "failed to read opencode auth file",
+			CheckedAt: time.Now().UTC(),
+		}
+	}
+
+	credentials, err := countCredentialsFromAuthFile(content)
+	if err != nil {
+		a.logger.Warn("failed to parse opencode auth file",
+			zap.String("path", authFilePath),
+			zap.Error(err),
+		)
+		return shared.AuthStateReport{
+			Tool:      shared.ToolIdentifierOpenCode,
+			Status:    shared.AuthStatusError,
+			Reason:    "invalid auth file format",
+			CheckedAt: time.Now().UTC(),
+		}
+	}
+
+	if credentials > 0 {
+		a.logger.Debug("opencode authenticated",
+			zap.Int("credentials", credentials),
+			zap.String("path", authFilePath),
+		)
+		return shared.AuthStateReport{
+			Tool:      shared.ToolIdentifierOpenCode,
+			Status:    shared.AuthStatusAuthenticated,
+			Reason:    fmt.Sprintf("%d credentials found", credentials),
+			CheckedAt: time.Now().UTC(),
+		}
+	}
+
 	return shared.AuthStateReport{
 		Tool:      shared.ToolIdentifierOpenCode,
-		Status:    shared.AuthStatusError,
-		Reason:    "unexpected output format",
+		Status:    shared.AuthStatusUnauthenticated,
+		Reason:    "no credentials found",
 		CheckedAt: time.Now().UTC(),
 	}
+}
+
+func commandAvailable(binary string) bool {
+	if strings.TrimSpace(binary) == "" {
+		return false
+	}
+
+	if filepath.IsAbs(binary) {
+		return isExecutableFile(binary)
+	}
+
+	_, err := exec.LookPath(binary)
+	return err == nil
+}
+
+func opencodeAuthFilePath() (string, error) {
+	if xdgDataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); xdgDataHome != "" {
+		return filepath.Join(xdgDataHome, "opencode", "auth.json"), nil
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return "", fmt.Errorf("resolve user home: %w", err)
+	}
+
+	return filepath.Join(homeDir, ".local", "share", "opencode", "auth.json"), nil
+}
+
+func countCredentialsFromAuthFile(content []byte) (int, error) {
+	if len(strings.TrimSpace(string(content))) == 0 {
+		return 0, nil
+	}
+
+	var decoded any
+	if err := json.Unmarshal(content, &decoded); err != nil {
+		return 0, err
+	}
+
+	return countCredentialNodes(decoded), nil
+}
+
+func countCredentialNodes(value any) int {
+	switch v := value.(type) {
+	case []any:
+		return len(v)
+	case map[string]any:
+		for _, key := range []string{"credentials", "providers", "accounts", "tokens", "auth"} {
+			if nested, ok := v[key]; ok {
+				count := countCredentialCollection(nested)
+				if count > 0 {
+					return count
+				}
+			}
+		}
+		return countCredentialCollection(v)
+	default:
+		return 0
+	}
+}
+
+func countCredentialCollection(value any) int {
+	switch v := value.(type) {
+	case []any:
+		total := 0
+		for _, item := range v {
+			total += countCredentialCollection(item)
+		}
+		if total > 0 {
+			return total
+		}
+		return len(v)
+	case map[string]any:
+		if looksLikeCredential(v) {
+			return 1
+		}
+		total := 0
+		for _, nested := range v {
+			total += countCredentialCollection(nested)
+		}
+		return total
+	default:
+		return 0
+	}
+}
+
+func looksLikeCredential(fields map[string]any) bool {
+	credentialKeys := []string{
+		"provider",
+		"type",
+		"token",
+		"access_token",
+		"refresh_token",
+		"api_key",
+		"kind",
+	}
+
+	for _, key := range credentialKeys {
+		if value, ok := fields[key]; ok {
+			if text, ok := value.(string); ok {
+				if strings.TrimSpace(text) != "" {
+					return true
+				}
+				continue
+			}
+
+			if value != nil {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // isCommandNotFound returns true if the result indicates the command binary was not found.
@@ -168,59 +266,6 @@ func isCommandNotFound(result AuthRunResult) bool {
 
 	for _, pattern := range notFoundPatterns {
 		if strings.Contains(errMsg, pattern) || strings.Contains(combined, pattern) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasAuthenticatedIndicator checks for patterns indicating credentials are present.
-func hasAuthenticatedIndicator(lower string) bool {
-	storedCredentialPatterns := []string{
-		"status: active",
-		"type: api",
-		"type: oauth",
-		"type: wellknown",
-	}
-	for _, p := range storedCredentialPatterns {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-
-	// Environment variable indicators
-	envVarPatterns := []string{
-		"anthropic_api_key",
-		"openai_api_key",
-		"api_key",
-	}
-	for _, p := range envVarPatterns {
-		if strings.Contains(lower, p) {
-			// Only count as authenticated if the env var appears to have a value
-			// (not just listed as missing/empty)
-			if !strings.Contains(lower, "not set") && !strings.Contains(lower, "missing") &&
-				!strings.Contains(lower, "empty") && !strings.Contains(lower, "unset") {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// hasUnauthenticatedIndicator checks for patterns indicating no credentials.
-func hasUnauthenticatedIndicator(lower string) bool {
-	patterns := []string{
-		"not authenticated",
-		"no credentials",
-		"not logged in",
-		"no stored credentials",
-		"no providers configured",
-		"unauthenticated",
-		"login required",
-	}
-	for _, p := range patterns {
-		if strings.Contains(lower, p) {
 			return true
 		}
 	}
