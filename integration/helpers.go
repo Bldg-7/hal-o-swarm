@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/hal-o-swarm/hal-o-swarm/internal/agent"
-	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
-	"github.com/hal-o-swarm/hal-o-swarm/internal/storage"
-	"github.com/hal-o-swarm/hal-o-swarm/internal/supervisor"
+	"github.com/Bldg-7/hal-o-swarm/internal/agent"
+	"github.com/Bldg-7/hal-o-swarm/internal/shared"
+	"github.com/Bldg-7/hal-o-swarm/internal/storage"
+	"github.com/Bldg-7/hal-o-swarm/internal/supervisor"
 	"go.uber.org/zap"
 	_ "modernc.org/sqlite"
 )

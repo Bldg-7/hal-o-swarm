@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/hal-o-swarm/hal-o-swarm/internal/agent"
-	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
+	"github.com/Bldg-7/hal-o-swarm/internal/agent"
+	"github.com/Bldg-7/hal-o-swarm/internal/config"
 	"go.uber.org/zap"
 )
 

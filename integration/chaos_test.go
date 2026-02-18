@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
-	"github.com/hal-o-swarm/hal-o-swarm/internal/supervisor"
+	"github.com/Bldg-7/hal-o-swarm/internal/config"
+	"github.com/Bldg-7/hal-o-swarm/internal/supervisor"
 	"go.uber.org/zap"
 )
 

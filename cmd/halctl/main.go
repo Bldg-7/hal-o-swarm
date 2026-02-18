@@ -7,7 +7,7 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/hal-o-swarm/hal-o-swarm/internal/halctl"
+	"github.com/Bldg-7/hal-o-swarm/internal/halctl"
 )
 
 var (

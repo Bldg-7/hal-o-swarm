@@ -1,4 +1,4 @@
-module github.com/hal-o-swarm/hal-o-swarm
+module github.com/Bldg-7/hal-o-swarm
 
 go 1.24.3
 

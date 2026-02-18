@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
+	"github.com/Bldg-7/hal-o-swarm/internal/shared"
 )
 
 func (r *NodeRegistry) HandleAuthStateMessage(nodeID string, payload []byte) error {

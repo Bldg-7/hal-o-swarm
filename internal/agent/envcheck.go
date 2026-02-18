@@ -11,7 +11,7 @@ import (
 	"time"
 
 	semver "github.com/Masterminds/semver/v3"
-	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
+	"github.com/Bldg-7/hal-o-swarm/internal/config"
 )
 
 // EnvCheckStatus represents the overall environment check status.

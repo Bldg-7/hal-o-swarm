@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hal-o-swarm/hal-o-swarm/internal/storage"
+	"github.com/Bldg-7/hal-o-swarm/internal/storage"
 	"go.uber.org/zap"
 	_ "modernc.org/sqlite"
 )
