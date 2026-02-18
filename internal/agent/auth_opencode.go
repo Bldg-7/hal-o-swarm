@@ -17,34 +17,45 @@ type AuthAdapter interface {
 // OpencodeAuthAdapter checks opencode authentication status by running
 // `opencode auth list` and parsing the output for credential indicators.
 type OpencodeAuthAdapter struct {
-	runner AuthRunner
-	logger *zap.Logger
+	runner        AuthRunner
+	logger        *zap.Logger
+	statusCommand []string
 }
 
 // NewOpencodeAuthAdapter creates an OpencodeAuthAdapter with the given runner and logger.
 func NewOpencodeAuthAdapter(runner AuthRunner, logger *zap.Logger) *OpencodeAuthAdapter {
+	return NewOpencodeAuthAdapterWithCommand(runner, logger, nil)
+}
+
+func NewOpencodeAuthAdapterWithCommand(runner AuthRunner, logger *zap.Logger, statusCommand []string) *OpencodeAuthAdapter {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	if len(statusCommand) == 0 {
+		if cap := GetToolCapability(ToolOpencode); cap != nil {
+			statusCommand = append([]string(nil), cap.StatusCommand...)
+		}
+	}
+
 	return &OpencodeAuthAdapter{
-		runner: runner,
-		logger: logger,
+		runner:        runner,
+		logger:        logger,
+		statusCommand: statusCommand,
 	}
 }
 
 // CheckAuth runs `opencode auth list` and maps the output to a canonical AuthStateReport.
 func (a *OpencodeAuthAdapter) CheckAuth(ctx context.Context) shared.AuthStateReport {
-	cap := GetToolCapability(ToolOpencode)
-	if cap == nil {
+	if len(a.statusCommand) == 0 {
 		return shared.AuthStateReport{
 			Tool:      shared.ToolIdentifierOpenCode,
 			Status:    shared.AuthStatusError,
-			Reason:    "opencode tool capability not found",
+			Reason:    "opencode status command not configured",
 			CheckedAt: time.Now().UTC(),
 		}
 	}
 
-	result := a.runner.RunAuthCheck(ctx, cap.StatusCommand)
+	result := a.runner.RunAuthCheck(ctx, a.statusCommand)
 
 	// Timeout → error
 	if result.TimedOut {

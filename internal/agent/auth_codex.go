@@ -12,32 +12,43 @@ import (
 // CodexAuthAdapter checks Codex authentication status by running
 // `codex login --status` and mapping the exit code to auth status.
 type CodexAuthAdapter struct {
-	runner AuthRunner
-	logger *zap.Logger
+	runner        AuthRunner
+	logger        *zap.Logger
+	statusCommand []string
 }
 
 func NewCodexAuthAdapter(runner AuthRunner, logger *zap.Logger) *CodexAuthAdapter {
+	return NewCodexAuthAdapterWithCommand(runner, logger, nil)
+}
+
+func NewCodexAuthAdapterWithCommand(runner AuthRunner, logger *zap.Logger, statusCommand []string) *CodexAuthAdapter {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	if len(statusCommand) == 0 {
+		if cap := GetToolCapability(ToolCodex); cap != nil {
+			statusCommand = append([]string(nil), cap.StatusCommand...)
+		}
+	}
+
 	return &CodexAuthAdapter{
-		runner: runner,
-		logger: logger,
+		runner:        runner,
+		logger:        logger,
+		statusCommand: statusCommand,
 	}
 }
 
 func (a *CodexAuthAdapter) CheckAuth(ctx context.Context) shared.AuthStateReport {
-	cap := GetToolCapability(ToolCodex)
-	if cap == nil {
+	if len(a.statusCommand) == 0 {
 		return shared.AuthStateReport{
 			Tool:      shared.ToolIdentifierCodex,
 			Status:    shared.AuthStatusError,
-			Reason:    "codex tool capability not found",
+			Reason:    "codex status command not configured",
 			CheckedAt: time.Now().UTC(),
 		}
 	}
 
-	result := a.runner.RunAuthCheck(ctx, cap.StatusCommand)
+	result := a.runner.RunAuthCheck(ctx, a.statusCommand)
 
 	if result.TimedOut {
 		a.logger.Warn("codex auth check timed out")

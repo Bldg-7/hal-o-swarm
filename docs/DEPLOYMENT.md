@@ -236,6 +236,11 @@ Edit `/etc/hal-o-swarm/agent.config.json`:
   "supervisor_url": "ws://supervisor-host:8420",
   "auth_token": "your-shared-secret-here",
   "opencode_port": 4096,
+  "tool_paths": {
+    "opencode": "/usr/local/bin/opencode",
+    "claude": "/usr/local/bin/claude",
+    "codex": "/usr/local/bin/codex"
+  },
   "projects": [
     {
       "name": "project-1",
@@ -253,6 +258,7 @@ Edit `/etc/hal-o-swarm/agent.config.json`:
 - `supervisor_url`: WebSocket URL of supervisor (must match supervisor's listening address)
 - `auth_token`: Must match supervisor's auth_token
 - `opencode_port`: Port for local opencode serve (must be unique per agent)
+- `tool_paths`: Optional absolute binary paths for auth checks when tools are not discoverable in service PATH
 - `projects`: List of projects this agent manages
 
 ### Environment Variables

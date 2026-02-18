@@ -11,7 +11,12 @@ type AgentConfig struct {
 	AuthToken             string `json:"auth_token"`
 	OpencodePort          int    `json:"opencode_port"`
 	AuthReportIntervalSec int    `json:"auth_report_interval_sec"`
-	Projects              []struct {
+	ToolPaths             struct {
+		Opencode string `json:"opencode"`
+		Claude   string `json:"claude"`
+		Codex    string `json:"codex"`
+	} `json:"tool_paths"`
+	Projects []struct {
 		Name      string `json:"name"`
 		Directory string `json:"directory"`
 	} `json:"projects"`

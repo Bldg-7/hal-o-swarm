@@ -12,32 +12,43 @@ import (
 // ClaudeAuthAdapter checks Claude Code authentication status by running
 // `claude auth status` and mapping the exit code to auth status.
 type ClaudeAuthAdapter struct {
-	runner AuthRunner
-	logger *zap.Logger
+	runner        AuthRunner
+	logger        *zap.Logger
+	statusCommand []string
 }
 
 func NewClaudeAuthAdapter(runner AuthRunner, logger *zap.Logger) *ClaudeAuthAdapter {
+	return NewClaudeAuthAdapterWithCommand(runner, logger, nil)
+}
+
+func NewClaudeAuthAdapterWithCommand(runner AuthRunner, logger *zap.Logger, statusCommand []string) *ClaudeAuthAdapter {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	if len(statusCommand) == 0 {
+		if cap := GetToolCapability(ToolClaudeCode); cap != nil {
+			statusCommand = append([]string(nil), cap.StatusCommand...)
+		}
+	}
+
 	return &ClaudeAuthAdapter{
-		runner: runner,
-		logger: logger,
+		runner:        runner,
+		logger:        logger,
+		statusCommand: statusCommand,
 	}
 }
 
 func (a *ClaudeAuthAdapter) CheckAuth(ctx context.Context) shared.AuthStateReport {
-	cap := GetToolCapability(ToolClaudeCode)
-	if cap == nil {
+	if len(a.statusCommand) == 0 {
 		return shared.AuthStateReport{
 			Tool:      shared.ToolIdentifierClaudeCode,
 			Status:    shared.AuthStatusError,
-			Reason:    "claude_code tool capability not found",
+			Reason:    "claude status command not configured",
 			CheckedAt: time.Now().UTC(),
 		}
 	}
 
-	result := a.runner.RunAuthCheck(ctx, cap.StatusCommand)
+	result := a.runner.RunAuthCheck(ctx, a.statusCommand)
 
 	if result.TimedOut {
 		a.logger.Warn("claude auth check timed out")

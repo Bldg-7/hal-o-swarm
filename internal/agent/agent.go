@@ -103,6 +103,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	authRunner := NewAuthCommandRunner(10*time.Second, logger)
+	opencodeStatusCommand := resolveStatusCommand(ToolOpencode, a.cfg.ToolPaths.Opencode, logger)
+	claudeStatusCommand := resolveStatusCommand(ToolClaudeCode, a.cfg.ToolPaths.Claude, logger)
+	codexStatusCommand := resolveStatusCommand(ToolCodex, a.cfg.ToolPaths.Codex, logger)
 
 	a.oauthExecutor = NewOAuthTriggerExecutor(authRunner, logger)
 	if err := RegisterOAuthTriggerHandler(a.wsClient, a.oauthExecutor); err != nil {
@@ -110,9 +113,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	adapters := []AuthAdapter{
-		NewOpencodeAuthAdapter(authRunner, logger),
-		NewClaudeAuthAdapter(authRunner, logger),
-		NewCodexAuthAdapter(authRunner, logger),
+		NewOpencodeAuthAdapterWithCommand(authRunner, logger, opencodeStatusCommand),
+		NewClaudeAuthAdapterWithCommand(authRunner, logger, claudeStatusCommand),
+		NewCodexAuthAdapterWithCommand(authRunner, logger, codexStatusCommand),
 	}
 
 	reportInterval := time.Duration(a.cfg.AuthReportIntervalSec) * time.Second
