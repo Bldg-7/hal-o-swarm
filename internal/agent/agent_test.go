@@ -205,19 +205,19 @@ func TestAgentLifecycle(t *testing.T) {
 	}
 }
 
-// TestProjectRegistryEmptyProjects tests that empty project list is rejected.
+// TestProjectRegistryEmptyProjects tests that empty project list is allowed.
 func TestProjectRegistryEmptyProjects(t *testing.T) {
-	_, err := NewProjectRegistry([]struct {
+	registry, err := NewProjectRegistry([]struct {
 		Name      string `json:"name"`
 		Directory string `json:"directory"`
 	}{})
 
-	if err == nil {
-		t.Fatal("expected error for empty projects list, got nil")
+	if err != nil {
+		t.Fatalf("unexpected error for empty projects list: %v", err)
 	}
 
-	if !contains(err.Error(), "no projects") {
-		t.Errorf("error message does not mention empty projects: %s", err.Error())
+	if registry.ProjectCount() != 0 {
+		t.Errorf("expected 0 projects, got %d", registry.ProjectCount())
 	}
 }
 

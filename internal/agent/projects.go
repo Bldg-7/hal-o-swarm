@@ -25,10 +25,6 @@ func NewProjectRegistry(projects []struct {
 	Name      string `json:"name"`
 	Directory string `json:"directory"`
 }) (*ProjectRegistry, error) {
-	if len(projects) == 0 {
-		return nil, fmt.Errorf("project registry: no projects provided")
-	}
-
 	registry := &ProjectRegistry{
 		projects: make(map[string]*ProjectInfo),
 	}

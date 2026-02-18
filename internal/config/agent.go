@@ -49,9 +49,6 @@ func validateAgentConfig(cfg *AgentConfig) error {
 	if cfg.OpencodePort <= 0 || cfg.OpencodePort > 65535 {
 		return fmt.Errorf("validation error: opencode_port must be between 1 and 65535, got %d", cfg.OpencodePort)
 	}
-	if len(cfg.Projects) == 0 {
-		return fmt.Errorf("validation error: projects array must not be empty")
-	}
 	for i, proj := range cfg.Projects {
 		if proj.Name == "" {
 			return fmt.Errorf("validation error: projects[%d].name is required", i)

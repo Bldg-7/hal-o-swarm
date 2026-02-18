@@ -154,11 +154,8 @@ func TestAgentConfigValidationEmptyProjects(t *testing.T) {
 	cfg.Projects = nil
 
 	err := validateAgentConfig(cfg)
-	if err == nil {
-		t.Error("expected error for empty projects, got nil")
-	}
-	if err.Error() != "validation error: projects array must not be empty" {
-		t.Errorf("unexpected error: %v", err)
+	if err != nil {
+		t.Errorf("unexpected error for empty projects: %v", err)
 	}
 }
 
