@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/hal-o-swarm/hal-o-swarm/internal/config"
 	"github.com/hal-o-swarm/hal-o-swarm/internal/shared"
 	"go.uber.org/zap"
 )
@@ -55,6 +59,10 @@ func RegisterSessionCommandHandlers(client *WSClient, adapter OpencodeAdapter, l
 	client.RegisterCommandHandler("kill_session", handler)
 	client.RegisterCommandHandler("restart_session", handler)
 	client.RegisterCommandHandler("session_status", handler)
+	client.RegisterCommandHandler("env_check", handler)
+	client.RegisterCommandHandler("env_provision", handler)
+	client.RegisterCommandHandler("agentmd_diff", handler)
+	client.RegisterCommandHandler("agentmd_sync", handler)
 	return nil
 }
 
@@ -164,9 +172,150 @@ func executeSessionCommand(ctx context.Context, adapter OpencodeAdapter, cmd ses
 		}
 		result.Output = string(newSessionID)
 		return nil
+	case "env_check":
+		project := strings.TrimSpace(cmd.Target.Project)
+		if project == "" {
+			return fmt.Errorf("project is required")
+		}
+		directory, err := projectDirectoryForCommand(adapter, project)
+		if err != nil {
+			return err
+		}
+		manifest := loadProjectManifest(directory)
+		var reqs *config.ManifestRequirements
+		if manifest != nil {
+			reqs = manifest.Requirements
+		}
+		checker := NewEnvChecker(directory, nil)
+		check := checker.Check(ctx, reqs)
+		payload, err := json.Marshal(map[string]interface{}{
+			"project": project,
+			"status":  string(check.Status),
+			"details": map[string]interface{}{"drift": check.Drift, "timestamp": check.Timestamp},
+		})
+		if err != nil {
+			return fmt.Errorf("marshal env_check result: %w", err)
+		}
+		result.Output = string(payload)
+		return nil
+	case "env_provision":
+		project := strings.TrimSpace(cmd.Target.Project)
+		if project == "" {
+			return fmt.Errorf("project is required")
+		}
+		directory, err := projectDirectoryForCommand(adapter, project)
+		if err != nil {
+			return err
+		}
+		manifest := loadProjectManifest(directory)
+		provisioner := NewProvisioner(directory, project, manifest, "", nil)
+		provision, err := provisioner.Provision()
+		if err != nil {
+			return err
+		}
+		changes := make([]string, 0, len(provision.Applied))
+		for _, action := range provision.Applied {
+			changes = append(changes, fmt.Sprintf("%s:%s:%s", action.Category, action.Item, action.Action))
+		}
+		payload, err := json.Marshal(map[string]interface{}{
+			"project": project,
+			"status":  string(provision.Status),
+			"changes": changes,
+			"details": map[string]interface{}{"applied": provision.Applied, "pending": provision.Pending, "timestamp": provision.Timestamp},
+		})
+		if err != nil {
+			return fmt.Errorf("marshal env_provision result: %w", err)
+		}
+		result.Output = string(payload)
+		return nil
+	case "agentmd_diff":
+		project := strings.TrimSpace(cmd.Target.Project)
+		if project == "" {
+			return fmt.Errorf("project is required")
+		}
+		directory, err := projectDirectoryForCommand(adapter, project)
+		if err != nil {
+			return err
+		}
+		localPath := filepath.Join(directory, "AGENT.md")
+		local := ""
+		if data, err := os.ReadFile(localPath); err == nil {
+			local = string(data)
+		}
+		template := strings.ReplaceAll(defaultAgentMD, "{{PROJECT_NAME}}", project)
+		delta := ""
+		if local != template {
+			delta = "content differs"
+		}
+		payload, err := json.Marshal(map[string]interface{}{
+			"project":  project,
+			"local":    local,
+			"template": template,
+			"diff":     delta,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal agentmd_diff result: %w", err)
+		}
+		result.Output = string(payload)
+		return nil
+	case "agentmd_sync":
+		project := strings.TrimSpace(cmd.Target.Project)
+		if project == "" {
+			return fmt.Errorf("project is required")
+		}
+		directory, err := projectDirectoryForCommand(adapter, project)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(directory, "AGENT.md")
+		status := "already_synced"
+		message := "AGENT.md already exists"
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			manifest := &config.EnvManifest{Requirements: &config.ManifestRequirements{AgentConfig: &config.AgentConfigRequirements{Model: "default", Temperature: 0}}}
+			provisioner := NewProvisioner(directory, project, manifest, "", nil)
+			if _, err := provisioner.Provision(); err != nil {
+				return err
+			}
+			status = "synced"
+			message = "AGENT.md created"
+		}
+		payload, err := json.Marshal(map[string]interface{}{
+			"project": project,
+			"status":  status,
+			"message": message,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal agentmd_sync result: %w", err)
+		}
+		result.Output = string(payload)
+		return nil
 	default:
 		return fmt.Errorf("unsupported command type %s", cmd.Type)
 	}
+}
+
+func projectDirectoryForCommand(adapter OpencodeAdapter, project string) (string, error) {
+	real, ok := adapter.(*RealAdapter)
+	if !ok {
+		return "", fmt.Errorf("env command unsupported for adapter %T", adapter)
+	}
+
+	real.mu.RLock()
+	defer real.mu.RUnlock()
+	directory, ok := real.projectDirs[project]
+	if !ok || directory == "" {
+		return "", fmt.Errorf("project directory not found for %s", project)
+	}
+	return directory, nil
+}
+
+func loadProjectManifest(projectDir string) *config.EnvManifest {
+	path := filepath.Join(projectDir, "env-manifest.json")
+	manifest, err := config.LoadEnvManifest(path)
+	if err != nil {
+		return nil
+	}
+	return manifest
 }
 
 func sendSessionCommandResult(sender commandResultSender, fallbackRequestID string, result sessionCommandResult) error {

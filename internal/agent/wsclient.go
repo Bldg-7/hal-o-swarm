@@ -59,6 +59,7 @@ type pendingEvent struct {
 type WSClient struct {
 	url       string
 	authToken string
+	nodeID    string
 	logger    *zap.Logger
 	backoff   *Backoff
 
@@ -109,6 +110,10 @@ func WithOnConnectHook(hook func() error) WSClientOption {
 // WithBackoff overrides the default backoff configuration.
 func WithBackoff(b *Backoff) WSClientOption {
 	return func(c *WSClient) { c.backoff = b }
+}
+
+func WithNodeID(nodeID string) WSClientOption {
+	return func(c *WSClient) { c.nodeID = nodeID }
 }
 
 // NewWSClient creates a WebSocket client for supervisor communication.
@@ -175,6 +180,9 @@ func (c *WSClient) connectLoop(ctx context.Context) {
 func (c *WSClient) dialAndServe(ctx context.Context) error {
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+c.authToken)
+	if c.nodeID != "" {
+		header.Set("X-Node-ID", c.nodeID)
+	}
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,

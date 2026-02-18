@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -20,6 +21,7 @@ type HTTPAPI struct {
 	registry      *NodeRegistry
 	tracker       *SessionTracker
 	dispatcher    *CommandDispatcher
+	hub           *Hub
 	oauth         *OAuthOrchestrator
 	costs         *CostAggregator
 	db            *sql.DB
@@ -80,9 +82,15 @@ func (a *HTTPAPI) Handler() http.Handler {
 	mux.Handle("GET /api/v1/auth/drift", a.requireAuth(http.HandlerFunc(a.handleAuthDrift)))
 	mux.Handle("GET /api/v1/events", a.requireAuth(http.HandlerFunc(a.handleListEvents)))
 	mux.Handle("GET /api/v1/cost", a.requireAuth(http.HandlerFunc(a.handleCostReport)))
+	mux.Handle("GET /api/v1/cost/{period}", a.requireAuth(http.HandlerFunc(a.handleCostReportByPath)))
+	mux.Handle("GET /api/v1/env/status/{project}", a.requireAuth(http.HandlerFunc(a.handleEnvStatus)))
+	mux.Handle("GET /api/v1/agentmd/diff/{project}", a.requireAuth(http.HandlerFunc(a.handleAgentMDDiff)))
 	mux.Handle("POST /api/v1/commands", a.requireAuth(http.HandlerFunc(a.handleCommand)))
 	mux.Handle("POST /api/v1/commands/credentials/push", a.requireAuth(http.HandlerFunc(a.handleCredentialPush)))
 	mux.Handle("POST /api/v1/oauth/trigger", a.requireAuth(http.HandlerFunc(a.handleOAuthTrigger)))
+	if a.hub != nil {
+		mux.HandleFunc("GET /ws/agent", a.hub.ServeWS)
+	}
 
 	return mux
 }
@@ -101,6 +109,10 @@ func (a *HTTPAPI) SetAuditLogger(al *AuditLogger) {
 
 func (a *HTTPAPI) SetOAuthOrchestrator(orchestrator *OAuthOrchestrator) {
 	a.oauth = orchestrator
+}
+
+func (a *HTTPAPI) SetHub(hub *Hub) {
+	a.hub = hub
 }
 
 type apiResponse struct {
@@ -511,12 +523,18 @@ func (a *HTTPAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	commandType, err := ParseCommandIntent(req.Type)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "BAD_REQUEST")
+		return
+	}
+
 	correlationID := shared.GetCorrelationID(r.Context())
 	ctx := shared.WithCorrelationID(r.Context(), correlationID)
 
 	timeout := time.Duration(req.Timeout) * time.Second
 	cmd := Command{
-		Type:           CommandType(req.Type),
+		Type:           commandType,
 		IdempotencyKey: req.IdempotencyKey,
 		Target:         CommandTarget{Project: req.Target},
 		Args:           req.Args,
@@ -682,6 +700,72 @@ func (a *HTTPAPI) handleOAuthTrigger(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apiResponse{Data: result})
 }
 
+func (a *HTTPAPI) handleEnvStatus(w http.ResponseWriter, r *http.Request) {
+	if a.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "command dispatcher unavailable", "SERVICE_UNAVAILABLE")
+		return
+	}
+	project := strings.TrimSpace(r.PathValue("project"))
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project is required", "BAD_REQUEST")
+		return
+	}
+
+	output, err := a.dispatchJSONCommand(r.Context(), Command{Type: CommandTypeEnvCheck, Target: CommandTarget{Project: project}})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error(), "DISPATCH_ERROR")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{Data: output})
+}
+
+func (a *HTTPAPI) handleAgentMDDiff(w http.ResponseWriter, r *http.Request) {
+	if a.dispatcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "command dispatcher unavailable", "SERVICE_UNAVAILABLE")
+		return
+	}
+	project := strings.TrimSpace(r.PathValue("project"))
+	if project == "" {
+		writeError(w, http.StatusBadRequest, "project is required", "BAD_REQUEST")
+		return
+	}
+
+	output, err := a.dispatchJSONCommand(r.Context(), Command{Type: CommandTypeAgentMDDiff, Target: CommandTarget{Project: project}})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error(), "DISPATCH_ERROR")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{Data: output})
+}
+
+func (a *HTTPAPI) dispatchJSONCommand(ctx context.Context, cmd Command) (map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(ctx, cmd.EffectiveTimeout()+5*time.Second)
+	defer cancel()
+
+	result, err := a.dispatcher.DispatchCommand(ctx, cmd)
+	if err != nil {
+		return nil, fmt.Errorf("command dispatch failed: %w", err)
+	}
+	if result.Status != CommandStatusSuccess {
+		if result.Error != "" {
+			return nil, errors.New(result.Error)
+		}
+		return nil, fmt.Errorf("command failed with status %s", result.Status)
+	}
+
+	decoded := make(map[string]interface{})
+	if result.Output == "" {
+		return decoded, nil
+	}
+	if err := json.Unmarshal([]byte(result.Output), &decoded); err != nil {
+		return nil, fmt.Errorf("invalid command output: %w", err)
+	}
+
+	return decoded, nil
+}
+
 func (a *HTTPAPI) credentialPushIdempotencyGet(key string) (*CommandResult, bool) {
 	if key == "" {
 		return nil, false
@@ -726,6 +810,27 @@ func (a *HTTPAPI) handleCostReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	period := strings.ToLower(r.URL.Query().Get("period"))
+	if period == "" {
+		period = "today"
+	}
+
+	report, err := a.costs.Report(period)
+	if err != nil {
+		a.logger.Error("cost report failed", zap.Error(err))
+		writeError(w, http.StatusInternalServerError, "internal error", "INTERNAL_ERROR")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apiResponse{Data: report})
+}
+
+func (a *HTTPAPI) handleCostReportByPath(w http.ResponseWriter, r *http.Request) {
+	if a.costs == nil {
+		writeError(w, http.StatusServiceUnavailable, "cost aggregator unavailable", "SERVICE_UNAVAILABLE")
+		return
+	}
+
+	period := strings.ToLower(strings.TrimSpace(r.PathValue("period")))
 	if period == "" {
 		period = "today"
 	}

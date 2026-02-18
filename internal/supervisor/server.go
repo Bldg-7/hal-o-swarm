@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -28,6 +27,7 @@ type Server struct {
 
 	httpAPI      *HTTPAPI
 	httpShutdown func(ctx context.Context) error
+	wsShutdown   func(ctx context.Context) error
 	costs        *CostAggregator
 	audit        *AuditLogger
 	tlsConfig    *tls.Config
@@ -113,14 +113,6 @@ func (s *Server) Start() error {
 		zap.Int("heartbeat_interval_sec", s.cfg.Server.HeartbeatIntervalSec),
 	)
 
-	// Verify we can bind to the configured port
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.Server.Port))
-	if err != nil {
-		s.logger.Error("failed to bind to port", zap.Error(err))
-		return fmt.Errorf("failed to bind to port %d: %w", s.cfg.Server.Port, err)
-	}
-	defer listener.Close()
-
 	s.mu.Lock()
 	s.running = true
 	s.mu.Unlock()
@@ -141,6 +133,27 @@ func (s *Server) Start() error {
 	if s.costs != nil {
 		s.costs.Start(s.ctx)
 	}
+
+	wsAddr := fmt.Sprintf(":%d", s.cfg.Server.Port)
+	wsMux := http.NewServeMux()
+	wsMux.HandleFunc("/", s.hub.ServeWS)
+	wsSrv := &http.Server{
+		Addr:         wsAddr,
+		Handler:      wsMux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.logger.Info("websocket server starting", zap.String("addr", wsAddr))
+		if err := wsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("websocket server error", zap.Error(err))
+		}
+	}()
+	s.wsShutdown = wsSrv.Shutdown
 
 	if s.httpAPI != nil && s.cfg.Server.HTTPPort > 0 {
 		addr := fmt.Sprintf(":%d", s.cfg.Server.HTTPPort)
@@ -176,6 +189,14 @@ func (s *Server) Stop() error {
 	s.mu.Unlock()
 
 	s.logger.Info("supervisor shutting down gracefully")
+
+	if s.wsShutdown != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.wsShutdown(shutdownCtx); err != nil {
+			s.logger.Error("websocket server shutdown error", zap.Error(err))
+		}
+		shutdownCancel()
+	}
 
 	if s.httpShutdown != nil {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -274,12 +295,16 @@ func (s *Server) Hub() *Hub {
 func (s *Server) SetRegistry(registry *NodeRegistry) {
 	s.registry = registry
 	if s.hub != nil && registry != nil {
+		s.hub.ConfigureNodeRegistry(registry)
 		s.hub.ConfigureCredentialReconciliation(registry, s.cfg.Credentials.Version)
 	}
 }
 
 func (s *Server) SetHTTPAPI(api *HTTPAPI) {
 	s.httpAPI = api
+	if s.hub != nil {
+		s.httpAPI.SetHub(s.hub)
+	}
 	if s.costs != nil {
 		s.httpAPI.SetCostAggregator(s.costs)
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -83,9 +82,9 @@ func main() {
 		bot, botErr := supervisor.NewDiscordBot(
 			token,
 			cfg.Channels.Discord.GuildID,
-			nil,
+			dispatcher,
 			srv.Hub(),
-			nil,
+			tracker,
 			logger,
 		)
 		if botErr != nil {
@@ -112,15 +111,10 @@ func main() {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 0)
-	defer cancel()
-
 	if err := srv.Stop(); err != nil {
 		logger.Error("error during shutdown", zap.Error(err))
 		os.Exit(1)
 	}
-
-	<-ctx.Done()
 
 	logger.Info("supervisor exited cleanly")
 	os.Exit(0)

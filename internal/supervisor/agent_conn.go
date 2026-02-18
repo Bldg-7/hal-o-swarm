@@ -86,6 +86,13 @@ func (c *AgentConn) handleEnvelope(env *shared.Envelope) {
 		return
 	}
 
+	if env.Type == string(shared.MessageTypeRegister) {
+		c.mu.Lock()
+		c.lastHeartbeat = time.Now()
+		c.mu.Unlock()
+		return
+	}
+
 	if env.Type == string(shared.MessageTypeAuthState) {
 		c.hub.reconcileAuthState(c.agentID, env.Payload)
 		return

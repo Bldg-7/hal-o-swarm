@@ -18,6 +18,10 @@ const (
 	CommandTypeHandover       CommandType = "handover"
 	CommandTypeCredentialPush CommandType = "credential_push"
 	CommandTypeOAuthTrigger   CommandType = "oauth_trigger"
+	CommandTypeEnvCheck       CommandType = "env_check"
+	CommandTypeEnvProvision   CommandType = "env_provision"
+	CommandTypeAgentMDDiff    CommandType = "agentmd_diff"
+	CommandTypeAgentMDSync    CommandType = "agentmd_sync"
 )
 
 type CommandStatus string
@@ -74,6 +78,14 @@ func ParseCommandIntent(intent string) (CommandType, error) {
 		return CommandTypeCredentialPush, nil
 	case string(CommandTypeOAuthTrigger), "trigger_oauth", "/trigger_oauth":
 		return CommandTypeOAuthTrigger, nil
+	case string(CommandTypeEnvCheck), "check_env", "/check_env":
+		return CommandTypeEnvCheck, nil
+	case string(CommandTypeEnvProvision), "provision_env", "/provision_env":
+		return CommandTypeEnvProvision, nil
+	case string(CommandTypeAgentMDDiff), "diff_agentmd", "/diff_agentmd":
+		return CommandTypeAgentMDDiff, nil
+	case string(CommandTypeAgentMDSync), "sync_agentmd", "/sync_agentmd":
+		return CommandTypeAgentMDSync, nil
 	default:
 		return "", fmt.Errorf("unsupported command intent %q", intent)
 	}
@@ -88,7 +100,11 @@ func IsSupportedCommandType(commandType CommandType) bool {
 		CommandTypeSessionStatus,
 		CommandTypeHandover,
 		CommandTypeCredentialPush,
-		CommandTypeOAuthTrigger:
+		CommandTypeOAuthTrigger,
+		CommandTypeEnvCheck,
+		CommandTypeEnvProvision,
+		CommandTypeAgentMDDiff,
+		CommandTypeAgentMDSync:
 		return true
 	default:
 		return false

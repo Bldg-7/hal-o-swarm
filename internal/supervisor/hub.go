@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ type Hub struct {
 	credentialRegistry  *NodeRegistry
 	expectedCredVersion int64
 	commandDispatcher   *CommandDispatcher
+	nodeRegistry        *NodeRegistry
 }
 
 func NewHub(
@@ -89,8 +91,13 @@ func (h *Hub) Run() {
 
 		case conn := <-h.register:
 			h.mu.Lock()
+			if existing, ok := h.clients[conn.agentID]; ok {
+				close(existing.send)
+				existing.conn.Close()
+			}
 			h.clients[conn.agentID] = conn
 			h.mu.Unlock()
+			h.registerNodeOnline(conn.agentID)
 			h.logger.Info("agent registered", zap.String("agent_id", conn.agentID))
 			select {
 			case h.events <- HubEvent{Type: "node.online", AgentID: conn.agentID, Time: time.Now()}:
@@ -98,13 +105,18 @@ func (h *Hub) Run() {
 			}
 
 		case conn := <-h.unregister:
+			removed := false
 			h.mu.Lock()
 			if _, ok := h.clients[conn.agentID]; ok {
 				delete(h.clients, conn.agentID)
 				close(conn.send)
+				removed = true
 				h.logger.Info("agent unregistered", zap.String("agent_id", conn.agentID))
 			}
 			h.mu.Unlock()
+			if removed {
+				h.registerNodeOffline(conn.agentID)
+			}
 
 		case msg := <-h.broadcast:
 			h.mu.Lock()
@@ -149,7 +161,11 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent := newAgentConn(h, conn, uuid.New().String())
+	agentID := strings.TrimSpace(r.Header.Get("X-Node-ID"))
+	if agentID == "" {
+		agentID = uuid.New().String()
+	}
+	agent := newAgentConn(h, conn, agentID)
 	h.register <- agent
 
 	go agent.writePump()
@@ -235,6 +251,12 @@ func (h *Hub) ConfigureCommandResultDispatcher(dispatcher *CommandDispatcher) {
 	h.commandDispatcher = dispatcher
 }
 
+func (h *Hub) ConfigureNodeRegistry(registry *NodeRegistry) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.nodeRegistry = registry
+}
+
 func (h *Hub) reconcileCredentialSync(payload []byte) {
 	h.mu.RLock()
 	registry := h.credentialRegistry
@@ -299,10 +321,45 @@ func (h *Hub) checkHeartbeats() {
 
 	for _, conn := range timedOut {
 		h.logger.Warn("agent heartbeat timeout", zap.String("agent_id", conn.agentID))
+		h.registerNodeOffline(conn.agentID)
 		select {
 		case h.events <- HubEvent{Type: "node.offline", AgentID: conn.agentID, Time: now}:
 		default:
 		}
 		conn.conn.Close()
+	}
+}
+
+func (h *Hub) registerNodeOnline(agentID string) {
+	h.mu.RLock()
+	registry := h.nodeRegistry
+	h.mu.RUnlock()
+	if registry == nil || agentID == "" {
+		return
+	}
+
+	err := registry.Register(NodeEntry{ID: agentID, Hostname: agentID})
+	if err != nil {
+		h.logger.Warn("failed to register node online",
+			zap.String("node_id", agentID),
+			zap.Error(err),
+		)
+	}
+}
+
+func (h *Hub) registerNodeOffline(agentID string) {
+	h.mu.RLock()
+	registry := h.nodeRegistry
+	h.mu.RUnlock()
+	if registry == nil || agentID == "" {
+		return
+	}
+
+	err := registry.MarkOffline(agentID)
+	if err != nil && !errors.Is(err, ErrNodeNotFound) {
+		h.logger.Warn("failed to mark node offline",
+			zap.String("node_id", agentID),
+			zap.Error(err),
+		)
 	}
 }

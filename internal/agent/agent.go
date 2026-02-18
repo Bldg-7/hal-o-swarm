@@ -75,6 +75,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	a.credApplier = NewCredentialApplier(logger)
+	nodeID := nodeIdentifier()
 	opencodeURL := fmt.Sprintf("http://127.0.0.1:%d", a.cfg.OpencodePort)
 	realAdapter := NewOpencodeAdapter(opencodeURL, "")
 	for _, project := range a.cfg.Projects {
@@ -86,6 +87,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		a.cfg.SupervisorURL,
 		a.cfg.AuthToken,
 		logger,
+		WithNodeID(nodeID),
 	)
 
 	if err := RegisterSessionCommandHandlers(a.wsClient, a.opencodeAdapter, logger); err != nil {
@@ -96,7 +98,6 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("register credential push handler: %w", err)
 	}
 
-	nodeID := nodeIdentifier()
 	if err := RegisterCredentialSyncOnReconnect(a.wsClient, a.credApplier, nodeID); err != nil {
 		return fmt.Errorf("register credential sync on reconnect: %w", err)
 	}

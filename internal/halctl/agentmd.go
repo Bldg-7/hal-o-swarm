@@ -1,6 +1,8 @@
 package halctl
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -50,9 +52,29 @@ func SyncAgentMd(client *HTTPClient, project string) (*AgentMdSyncResult, error)
 		return nil, err
 	}
 
-	var result AgentMdSyncResult
-	if err := ParseResponse(body, &result); err != nil {
+	var cmd commandEnvelope
+	if err := ParseResponse(body, &cmd); err != nil {
 		return nil, err
+	}
+	if cmd.CommandID == "" && cmd.Output == "" && cmd.Status != "success" && cmd.Status != "failure" && cmd.Status != "timeout" {
+		var direct AgentMdSyncResult
+		if err := ParseResponse(body, &direct); err != nil {
+			return nil, err
+		}
+		return &direct, nil
+	}
+	if cmd.Status != "success" {
+		if cmd.Error != "" {
+			return nil, errors.New(cmd.Error)
+		}
+		return nil, fmt.Errorf("agentmd sync failed with status %s", cmd.Status)
+	}
+
+	var result AgentMdSyncResult
+	if cmd.Output != "" {
+		if err := json.Unmarshal([]byte(cmd.Output), &result); err != nil {
+			return nil, fmt.Errorf("failed to parse agentmd sync output: %w", err)
+		}
 	}
 
 	return &result, nil
