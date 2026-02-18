@@ -275,6 +275,11 @@ EOF
   "auth_token": "CHANGE_ME_SHARED_TOKEN",
   "opencode_port": 4096,
   "auth_report_interval_sec": 30,
+  "tool_paths": {
+    "opencode": "/usr/local/bin/opencode",
+    "claude": "/usr/local/bin/claude",
+    "codex": "/usr/local/bin/codex"
+  },
   "projects": [
     {
       "name": "example-project",
