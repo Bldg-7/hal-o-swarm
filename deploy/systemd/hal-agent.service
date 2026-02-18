@@ -31,7 +31,7 @@ ReadWritePaths=/var/lib/hal-o-swarm /var/log/hal-o-swarm /home
 # Resource limits
 LimitNOFILE=65536
 LimitNPROC=4096
-MemoryLimit=4G
+MemoryMax=4G
 CPUQuota=90%
 
 # Logging

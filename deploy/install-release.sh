@@ -380,7 +380,7 @@ ProtectHome=yes
 ReadWritePaths=/var/lib/hal-o-swarm /var/log/hal-o-swarm /home
 LimitNOFILE=65536
 LimitNPROC=4096
-MemoryLimit=4G
+MemoryMax=4G
 CPUQuota=90%
 StandardOutput=journal
 StandardError=journal
@@ -395,7 +395,69 @@ EOF
     log_ok "Installed hal-agent.service"
   fi
 
+  install_agent_runtime_override
+
   systemctl daemon-reload
+}
+
+detect_opencode_binary() {
+  local candidate=""
+
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    local sudo_home=""
+    sudo_home="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+    candidate="$sudo_home/.opencode/bin/opencode"
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  fi
+
+  candidate="/root/.opencode/bin/opencode"
+  if [[ -x "$candidate" ]]; then
+    echo "$candidate"
+    return 0
+  fi
+
+  if command -v opencode >/dev/null 2>&1; then
+    command -v opencode
+    return 0
+  fi
+
+  return 1
+}
+
+install_agent_runtime_override() {
+  if [[ "$INSTALL_AGENT" != "true" ]]; then
+    return
+  fi
+
+  local override_dir="/etc/systemd/system/hal-agent.service.d"
+  local override_file="$override_dir/10-runtime-paths.conf"
+  local opencode_bin=""
+  opencode_bin="$(detect_opencode_binary || true)"
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    log_info "[dry-run] write $override_file"
+    if [[ -n "$opencode_bin" && "$opencode_bin" != "/usr/local/bin/opencode" ]]; then
+      log_info "[dry-run] BindReadOnlyPaths=$opencode_bin:/usr/local/bin/opencode"
+    fi
+    return
+  fi
+
+  mkdir -p "$override_dir"
+
+  cat >"$override_file" <<'EOF'
+[Service]
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+EOF
+
+  if [[ -n "$opencode_bin" && "$opencode_bin" != "/usr/local/bin/opencode" ]]; then
+    printf 'BindReadOnlyPaths=%s:/usr/local/bin/opencode\n' "$opencode_bin" >>"$override_file"
+    log_ok "Installed hal-agent runtime override (opencode bind: $opencode_bin)"
+  else
+    log_ok "Installed hal-agent runtime override (PATH only)"
+  fi
 }
 
 enable_services() {
