@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Bldg-7/hal-o-swarm/internal/shared"
+	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
 
@@ -196,6 +196,11 @@ func (c *WSClient) dialAndServe(ctx context.Context) error {
 	c.connMu.Lock()
 	c.conn = conn
 	c.connMu.Unlock()
+
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(wsWriteDeadline))
+	})
 
 	c.backoff.Reset()
 	c.logger.Info("connected to supervisor", zap.String("url", c.url))

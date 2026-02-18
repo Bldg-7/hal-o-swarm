@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/Bldg-7/hal-o-swarm/internal/shared"
+	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
 
@@ -74,10 +74,11 @@ func (c *AgentConn) readPump() {
 }
 
 func (c *AgentConn) handleEnvelope(env *shared.Envelope) {
+	c.mu.Lock()
+	c.lastHeartbeat = time.Now()
+	c.mu.Unlock()
+
 	if env.Type == string(shared.MessageTypeHeartbeat) {
-		c.mu.Lock()
-		c.lastHeartbeat = time.Now()
-		c.mu.Unlock()
 		return
 	}
 
@@ -87,9 +88,6 @@ func (c *AgentConn) handleEnvelope(env *shared.Envelope) {
 	}
 
 	if env.Type == string(shared.MessageTypeRegister) {
-		c.mu.Lock()
-		c.lastHeartbeat = time.Now()
-		c.mu.Unlock()
 		return
 	}
 

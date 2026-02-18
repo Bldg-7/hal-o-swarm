@@ -339,6 +339,20 @@ func (b *DiscordBot) handleInteraction(i *discordgo.InteractionCreate) {
 		return
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			panicErr := fmt.Errorf("panic: %v", r)
+			b.logger.Error("panic in interaction handler",
+				zap.Error(panicErr),
+				zap.Any("panic", r),
+				zap.String("command", i.ApplicationCommandData().Name),
+			)
+			_, _ = b.session.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{errorEmbed("Internal Error", "An unexpected error occurred. Please try again.")},
+			})
+		}
+	}()
+
 	data := i.ApplicationCommandData()
 	cmdName := data.Name
 
@@ -394,7 +408,10 @@ func (b *DiscordBot) handleStatus(opts map[string]*discordgo.ApplicationCommandI
 	}
 	project := projectOpt.StringValue()
 
-	result, err := b.dispatcher.DispatchCommand(context.Background(), Command{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := b.dispatcher.DispatchCommand(ctx, Command{
 		Type:   CommandTypeSessionStatus,
 		Target: CommandTarget{Project: project},
 	})
@@ -516,7 +533,10 @@ func (b *DiscordBot) handleResume(opts map[string]*discordgo.ApplicationCommandI
 		return validationErrorEmbed("Missing required argument: `message`")
 	}
 
-	result, err := b.dispatcher.DispatchCommand(context.Background(), Command{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := b.dispatcher.DispatchCommand(ctx, Command{
 		Type:   CommandTypePromptSession,
 		Target: CommandTarget{Project: projectOpt.StringValue()},
 		Args:   map[string]interface{}{"message": messageOpt.StringValue()},
@@ -551,7 +571,10 @@ func (b *DiscordBot) handleInject(opts map[string]*discordgo.ApplicationCommandI
 		target.NodeID = nodeID
 	}
 
-	result, err := b.dispatcher.DispatchCommand(context.Background(), Command{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := b.dispatcher.DispatchCommand(ctx, Command{
 		Type:   CommandTypePromptSession,
 		Target: target,
 		Args:   map[string]interface{}{"message": messageOpt.StringValue(), "session_id": sessionOpt.StringValue()},
@@ -582,7 +605,10 @@ func (b *DiscordBot) handleRestart(opts map[string]*discordgo.ApplicationCommand
 		target.NodeID = nodeID
 	}
 
-	result, err := b.dispatcher.DispatchCommand(context.Background(), Command{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := b.dispatcher.DispatchCommand(ctx, Command{
 		Type:   CommandTypeRestartSession,
 		Target: target,
 		Args:   map[string]interface{}{"session_id": sessionOpt.StringValue()},
@@ -613,7 +639,10 @@ func (b *DiscordBot) handleKill(opts map[string]*discordgo.ApplicationCommandInt
 		target.NodeID = nodeID
 	}
 
-	result, err := b.dispatcher.DispatchCommand(context.Background(), Command{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := b.dispatcher.DispatchCommand(ctx, Command{
 		Type:   CommandTypeKillSession,
 		Target: target,
 		Args:   map[string]interface{}{"session_id": sessionOpt.StringValue()},
@@ -632,7 +661,10 @@ func (b *DiscordBot) handleStart(opts map[string]*discordgo.ApplicationCommandIn
 		return validationErrorEmbed("Missing required argument: `project`")
 	}
 
-	result, err := b.dispatcher.DispatchCommand(context.Background(), Command{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := b.dispatcher.DispatchCommand(ctx, Command{
 		Type:   CommandTypeCreateSession,
 		Target: CommandTarget{Project: projectOpt.StringValue()},
 	})

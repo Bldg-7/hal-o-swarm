@@ -188,7 +188,12 @@ func (r *NodeRegistry) UpdateAuthState(nodeID string, states map[string]NodeAuth
 		node = fromDB
 	}
 
-	node.AuthStates = states
+	if node.AuthStates == nil {
+		node.AuthStates = make(map[string]NodeAuthState)
+	}
+	for k, v := range states {
+		node.AuthStates[k] = v
+	}
 	node.AuthUpdatedAt = time.Now().UTC()
 
 	r.mu.Lock()

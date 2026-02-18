@@ -206,10 +206,13 @@ func (s *Server) Stop() error {
 		shutdownCancel()
 	}
 
+	// Cancel context to signal goroutines to exit
 	s.cancel()
 	if s.costs != nil {
 		s.costs.Stop()
 	}
+
+	start := time.Now()
 
 	// Wait for all goroutines to finish with timeout
 	done := make(chan struct{})
@@ -220,9 +223,9 @@ func (s *Server) Stop() error {
 
 	select {
 	case <-done:
-		s.logger.Info("supervisor shutdown complete")
-	case <-s.ctx.Done():
-		s.logger.Warn("supervisor shutdown timeout exceeded")
+		s.logger.Info("supervisor shutdown complete", zap.Duration("elapsed", time.Since(start)))
+	case <-time.After(10 * time.Second):
+		s.logger.Warn("supervisor shutdown timeout exceeded", zap.Duration("elapsed", time.Since(start)))
 	}
 
 	s.mu.Lock()

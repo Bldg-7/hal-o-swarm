@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/Bldg-7/hal-o-swarm/internal/shared"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -366,6 +366,10 @@ func (d *CommandDispatcher) HandleCommandResult(result CommandResult) bool {
 	resultCh, ok := d.pending[result.CommandID]
 	d.pendingMu.Unlock()
 	if !ok {
+		d.logger.Warn("command result arrived after timeout or without waiter",
+			zap.String("command_id", result.CommandID),
+			zap.String("status", string(result.Status)),
+		)
 		return false
 	}
 
@@ -373,6 +377,9 @@ func (d *CommandDispatcher) HandleCommandResult(result CommandResult) bool {
 	case resultCh <- &result:
 		return true
 	default:
+		d.logger.Warn("command result channel full, dropping result",
+			zap.String("command_id", result.CommandID),
+		)
 		return false
 	}
 }
