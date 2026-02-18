@@ -18,19 +18,45 @@ var (
 
 func main() {
 	flag.Parse()
+	args := flag.Args()
+	if len(args) == 0 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	if args[0] == "help" {
+		printUsage()
+		return
+	}
+
+	if args[0] == "config" {
+		handleConfig(args[1:])
+		return
+	}
+
+	cliCfg, err := loadCLIConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to load CLI config: %v\n", err)
+		os.Exit(1)
+	}
+	if cliCfg != nil {
+		if *supervisorURL == defaultCLIURL && cliCfg.SupervisorURL != "" {
+			*supervisorURL = cliCfg.SupervisorURL
+		}
+		if *format == defaultCLIFormat && cliCfg.Format != "" {
+			*format = cliCfg.Format
+		}
+	}
 
 	if *authToken == "" {
 		*authToken = os.Getenv("HALCTL_AUTH_TOKEN")
 	}
+	if *authToken == "" && cliCfg != nil {
+		*authToken = cliCfg.AuthToken
+	}
 
 	if *authToken == "" {
 		fmt.Fprintf(os.Stderr, "Error: auth token required (--auth-token or HALCTL_AUTH_TOKEN env var)\n")
-		os.Exit(1)
-	}
-
-	args := flag.Args()
-	if len(args) == 0 {
-		printUsage()
 		os.Exit(1)
 	}
 
@@ -49,10 +75,6 @@ func main() {
 		handleAuth(client, args[1:])
 	case "agentmd":
 		handleAgentMd(client, args[1:])
-	case "init":
-		handleInit(args[1:])
-	case "help":
-		printUsage()
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n", args[0])
 		os.Exit(1)
@@ -484,7 +506,7 @@ Commands:
   agentmd diff <project>           Show AGENT.md diff
   agentmd sync <project>           Sync AGENT.md
 
-  init                             Interactive wizard for supervisor+agent config
+  config [supervisor|agent|cli]    Interactive local config setup
   
   help                             Show this help message
 
@@ -492,6 +514,9 @@ Examples:
   halctl -auth-token mytoken sessions list
   halctl -format json nodes list
   halctl env status my-project
-  halctl init
+  halctl config
+  halctl config supervisor
+  halctl config agent
+  halctl config cli
 `)
 }
