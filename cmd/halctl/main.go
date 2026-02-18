@@ -49,6 +49,8 @@ func main() {
 		handleAuth(client, args[1:])
 	case "agentmd":
 		handleAgentMd(client, args[1:])
+	case "init":
+		handleInit(args[1:])
 	case "help":
 		printUsage()
 	default:
@@ -481,6 +483,8 @@ Commands:
   
   agentmd diff <project>           Show AGENT.md diff
   agentmd sync <project>           Sync AGENT.md
+
+  init                             Interactive wizard for supervisor+agent config
   
   help                             Show this help message
 
@@ -488,5 +492,6 @@ Examples:
   halctl -auth-token mytoken sessions list
   halctl -format json nodes list
   halctl env status my-project
+  halctl init
 `)
 }
